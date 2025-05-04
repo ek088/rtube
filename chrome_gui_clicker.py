@@ -65,29 +65,12 @@ class PasswordWindow(ctk.CTkToplevel):
 
 # --- Функция для получения пути к драйверу (исправлена для поиска рядом с исполняемым файлом) ---
 def get_driver_path():
-    # Определяем базовую директорию: либо временная папка PyInstaller, либо директория скрипта
-    if getattr(sys, 'frozen', False):
-        # Если скрипт запущен из PyInstaller сборки (--onefile)
-        bundle_dir = sys._MEIPASS
-    else:
         # Если скрипт запущен как обычный .py файл
-        bundle_dir = os.path.abspath(os.path.dirname(__file__))
 
     # Указываем имя файла драйвера
     driver_name = 'yandexdriver.exe' # Или 'yandexdriver' для Linux/macOS
 
-    # Формируем полный путь к драйверу
-    driver_path = os.path.join(bundle_dir, driver_name)
-
-    # Добавим проверку существования файла для отладки
-    if not os.path.exists(driver_path):
-        print(f"Ошибка: Файл драйвера не найден по пути: {driver_path}")
-        # В продакшене можно поднять исключение или вернуть None
-        # Для этого примера, вернем None, чтобы вызвать ошибку при инициализации Service
-        return None
-
-    print(f"Найден файл драйвера по пути: {driver_path}")
-    return driver_path
+    return driver_name
 
 # --- Основной класс приложения (без изменений) ---
 class BrowserController(ctk.CTk):
