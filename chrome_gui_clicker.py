@@ -3,27 +3,103 @@ from selenium import webdriver
 from selenium.common.exceptions import WebDriverException
 from threading import Thread, Event
 import time
-import sys # Импортируем sys для проверки платформы и возможного указания пути к драйверу
+import sys
+import os # Импортируем os для работы с путями
+from selenium.webdriver.chrome.service import Service
 
 ctk.set_appearance_mode('dark')
 ctk.set_default_color_theme('blue')
 
-# Функция для получения пути к драйверу (может потребоваться, если chromedriver не в PATH)
-# В этом примере предполагается, что chromedriver находится в PATH.
-# Если это не так, вам может понадобиться изменить эту функцию или использовать Service.
-def get_driver_path():
-    # Здесь можно добавить логику для поиска chromedriver в определенных местах
-    # Или просто вернуть 'chromedriver', если он в PATH
-    return 'chromedriver'
+# --- Класс для окна ввода пароля ---
+class PasswordWindow(ctk.CTkToplevel):
+    def __init__(self, master=None):
+        super().__init__(master)
+        self.title("Вход")
+        self.geometry("300x150")
+        self.resizable(False, False)
 
+        # Центрируем окно пароля
+        self.update_idletasks()
+        x = master.winfo_x() + (master.winfo_width() // 2) - (self.winfo_width() // 2)
+        y = master.winfo_y() + (master.winfo_height() // 2) - (self.winfo_height() // 2)
+        self.geometry(f"+{x}+{y}")
+
+        self.label = ctk.CTkLabel(self, text="Введите пароль:")
+        self.label.pack(pady=10)
+
+        self.password_entry = ctk.CTkEntry(self, show="*") # show="*" скрывает ввод
+        self.password_entry.pack(pady=5)
+        self.password_entry.bind("<Return>", lambda event=None: self.check_password()) # Привязываем Enter
+
+        self.login_button = ctk.CTkButton(self, text="Войти", command=self.check_password)
+        self.login_button.pack(pady=10)
+
+        self.error_label = ctk.CTkLabel(self, text="", text_color="red")
+        self.error_label.pack()
+
+        # Перехват закрытия окна пароля
+        self.protocol("WM_DELETE_WINDOW", self.on_closing)
+
+        # Устанавливаем фокус на поле ввода пароля
+        self.password_entry.focus_set()
+
+        # Переменная для хранения результата проверки пароля
+        self.password_correct = False
+
+    def check_password(self):
+        entered_password = self.password_entry.get()
+        correct_password = "5647" # Заданный пароль
+
+        if entered_password == correct_password:
+            self.password_correct = True
+            self.destroy() # Закрываем окно пароля
+        else:
+            self.error_label.configure(text="Неверный пароль!")
+            self.password_entry.delete(0, ctk.END) # Очищаем поле ввода
+
+    def on_closing(self):
+        # Если окно пароля закрыто без ввода правильного пароля,
+        # мы должны завершить работу всего приложения.
+        self.master.destroy() # Закрываем основное окно (которое еще не создано, но это безопасно)
+
+
+# --- Функция для получения пути к драйверу (исправлена для поиска рядом с исполняемым файлом) ---
+def get_driver_path():
+    # Определяем базовую директорию: либо временная папка PyInstaller, либо директория скрипта
+    if getattr(sys, 'frozen', False):
+        # Если скрипт запущен из PyInstaller сборки (--onefile)
+        bundle_dir = sys._MEIPASS
+    else:
+        # Если скрипт запущен как обычный .py файл
+        bundle_dir = os.path.abspath(os.path.dirname(__file__))
+
+    # Указываем имя файла драйвера
+    driver_name = 'yandexdriver.exe' # Или 'yandexdriver' для Linux/macOS
+
+    # Формируем полный путь к драйверу
+    driver_path = os.path.join(bundle_dir, driver_name)
+
+    # Добавим проверку существования файла для отладки
+    if not os.path.exists(driver_path):
+        print(f"Ошибка: Файл драйвера не найден по пути: {driver_path}")
+        # В продакшене можно поднять исключение или вернуть None
+        # Для этого примера, вернем None, чтобы вызвать ошибку при инициализации Service
+        return None
+
+    print(f"Найден файл драйвера по пути: {driver_path}")
+    return driver_path
+
+# --- Основной класс приложения (без изменений) ---
 class BrowserController(ctk.CTk):
     def __init__(self):
         super().__init__()
         self.title('Browser Controller')
+        # Устанавливаем начальный размер окна.
+        # Возможно, его нужно будет скорректировать в зависимости от содержимого.
         self.geometry('600x500')
         self.stop_event = Event()
         self.threads = []
-        self.url_map = {} # Возможно, эта переменная не используется активно в текущем коде, но оставлена
+        self.url_map = {}
         self.create_widgets()
         self.protocol('WM_DELETE_WINDOW', self.on_close)
 
@@ -74,31 +150,51 @@ class BrowserController(ctk.CTk):
         self.status_label = ctk.CTkLabel(main_frame, text='Статус: Остановлено')
         self.status_label.pack(pady=5)
 
+
     def browser_instance(self, original_url, window_id, refresh_interval, width, height):
         options = webdriver.ChromeOptions()
+        # Указываем путь к исполняемому файлу Яндекс Браузера (если нужно)
+        # Если не указан, Selenium попытается найти его автоматически.
+        # Проверьте и укажите правильный путь, если автоматический поиск не работает.
+        YANDEX_BROWSER_BINARY_LOCATION = 'C:\\Users\\ezgtk\\AppData\\Local\\Yandex\\YandexBrowser\\Application\\browser.exe'
+
+        if YANDEX_BROWSER_BINARY_LOCATION and os.path.exists(YANDEX_BROWSER_BINARY_LOCATION):
+             options.binary_location = YANDEX_BROWSER_BINARY_LOCATION
+        else:
+             print("Внимание: Путь к исполняемому файлу Яндекс Браузера не указан или не найден.")
+             print("Selenium попытается найти его автоматически. Если возникнут проблемы, укажите путь.")
+             # Удаляем binary_location из options, если путь не найден
+             if 'binary_location' in options._arguments:
+                 options._arguments.remove('binary_location')
+
+
         options.add_argument('--disable-ad-blocking')
         options.add_argument('--disable-extensions')
         options.add_argument('--disable-notifications')
         options.add_argument('--mute-audio')
         options.add_argument('--disable-blink-features=AutomationControlled')
-        # Добавьте этот аргумент, если хотите запускать Chrome в фоновом режиме (без GUI)
-        # options.add_argument('--headless')
+        # options.add_argument('--headless') # Если хотите запускать в фоновом режиме
 
-        driver = None # Инициализируем driver перед циклом
+        driver = None
 
         while not self.stop_event.is_set(): # Внешний цикл для перезапуска браузера при ошибке
             try:
-                # Инициализация драйвера должна быть внутри try, так как она может вызвать исключение
-                driver = webdriver.Chrome(options=options) # Здесь предполагается, что chromedriver в PATH
-                # Если chromedriver не в PATH, используйте Service:
-                # from selenium.webdriver.chrome.service import Service
-                # service = Service(get_driver_path()) # Укажите путь к chromedriver
-                # driver = webdriver.Chrome(service=service, options=options)
+                # --- ИСПОЛЬЗУЕМ SERVICE ДЛЯ УКАЗАНИЯ ПУТИ К ДРАЙВЕРУ ---
+                # get_driver_path() теперь возвращает путь к yandexdriver.exe рядом с исполняемым файлом
+                driver_path = get_driver_path()
+                if not driver_path:
+                    # Если get_driver_path вернул None (файл не найден), выходим из цикла
+                    print(f"Окно {window_id}: Не удалось найти файл драйвера. Завершение потока.")
+                    break
+
+                service = Service(driver_path)
+                driver = webdriver.Chrome(service=service, options=options)
+                # ------------------------------------------------------
 
                 driver.set_window_size(width, height)
                 driver.get(original_url)
-                self.url_map[window_id] = original_url # Обновляем карту URL
-                print(f'Окно {window_id} запущено с URL: {original_url}')
+                self.url_map[window_id] = original_url
+                print(f'Окно {window_id} запущено с URL: {original_url} в Яндекс Браузере')
 
                 # Внутренний цикл для обновления страницы, пока не получена команда остановки
                 while not self.stop_event.is_set():
@@ -107,67 +203,108 @@ class BrowserController(ctk.CTk):
                         if current_url != original_url:
                             print(f'Обнаружен измененный URL в окне {window_id}. Возвращаю исходный...')
                             driver.get(original_url)
-                            time.sleep(2) # Небольшая задержка после возврата на исходный URL
+                            time.sleep(2)
 
-                        # Обновление всех окон/вкладок (если их несколько)
-                        # Note: Исходный код переключался на каждое окно и обновлял его.
-                        # Это может быть неэффективно, если окон много.
-                        # Возможно, имелось в виду обновление только текущего окна.
-                        # Оставляем как в декомпилированном коде, но имейте в виду.
+                        # Обновление всех окон/вкладок
                         for handle in driver.window_handles:
                             driver.switch_to.window(handle)
                             driver.get(current_url)
-                            # print(f'Окно {window_id} обновлено') # Печать в цикле может быть избыточной
 
-                        print(f'Окно {window_id} обновлено') # Печатаем один раз после всех обновлений
+                        print(f'Окно {window_id} обновлено')
 
                         time.sleep(refresh_interval)
 
                     except WebDriverException as e:
-                        # Если возникла ошибка WebDriverException внутри внутреннего цикла,
-                        # возможно, браузер был закрыт или возникла другая проблема.
                         print(f'WebDriverException в окне {window_id}: {str(e)}')
-                        # Выходим из внутреннего цикла, чтобы попытаться перезапустить браузер во внешнем цикле
-                        break # Выход из внутреннего цикла
+                        # Проверяем специфическую ошибку несовместимости версий
+                        if "session not created: This version of ChromeDriver only supports" in str(e):
+                            print(f"Окно {window_id}: ОШИБКА СОВМЕСТИМОСТИ ВЕРСИЙ! YandexDriver несовместим с версией Яндекс Браузера.")
+                            try:
+                                browser_version_info = str(e).split('Current browser version is ')[1]
+                                browser_version = browser_version_info.split(' ')[0]
+                                print(f"Требуется YandexDriver для версии браузера {browser_version}")
+                            except:
+                                print("Не удалось определить версию браузера из сообщения об ошибке.")
+                            print("Пожалуйста, скачайте совместимый YandexDriver с https://yandex.ru/dev/browser/driver/")
+                            if driver:
+                                try: driver.quit()
+                                except: pass
+                            driver = None
+                            self.stop_event.set() # Устанавливаем событие остановки для всех потоков при этой ошибке
+                            break # Завершаем поток
+                        elif driver and 'not reachable' in str(e).lower():
+                            print(f'Окно {window_id} закрыто, перезапускаю...')
+                            try: driver.quit()
+                            except: pass
+                            driver = None
+                            continue # Переходим к следующей итерации для перезапуска
+                        else:
+                            print(f'Критическая WebDriverException в окне {window_id}. Завершение работы потока.')
+                            if driver:
+                                try: driver.quit()
+                                except: pass
+                            driver = None
+                            self.stop_event.set() # Устанавливаем событие остановки для всех потоков при критической ошибке
+                            break
 
                     except Exception as e:
                          print(f'Неизвестная ошибка в окне {window_id} во внутреннем цикле: {str(e)}')
-                         break # Выход из внутреннего цикла при других ошибках
+                         if driver:
+                             try: driver.quit()
+                             except: pass
+                         driver = None
+                         self.stop_event.set() # Устанавливаем событие остановки для всех потоков при неизвестной ошибке
+                         break
 
             except Exception as e:
-                # Обработка ошибок при запуске браузера или критических ошибок
                 print(f'Ошибка при запуске/работе окна {window_id}: {str(e)}')
-                # Проверяем, связана ли ошибка с недоступностью Chrome (браузер закрыт)
-                if driver and 'chrome not reachable' in str(e).lower():
+                # Проверяем специфическую ошибку несовместимости версий при запуске
+                if "session not created: This version of ChromeDriver only supports" in str(e):
+                     print(f"Окно {window_id}: ОШИБКА СОВМЕСТИМОСТИ ВЕРСИЙ ПРИ ЗАПУСКЕ! YandexDriver несовместим с версией Яндекс Браузера.")
+                     try:
+                         browser_version_info = str(e).split('Current browser version is ')[1]
+                         browser_version = browser_version_info.split(' ')[0]
+                         print(f"Требуется YandexDriver для версии браузера {browser_version}")
+                     except:
+                         print("Не удалось определить версию браузера из сообщения об ошибке.")
+                     print("Пожалуйста, скачайте совместимый YandexDriver с https://yandex.ru/dev/browser/driver/")
+                     if driver:
+                        try: driver.quit()
+                        except: pass
+                     driver = None
+                     self.stop_event.set() # Устанавливаем событие остановки для всех потоков при этой ошибке
+                     break # Завершаем поток
+                elif driver and 'not reachable' in str(e).lower():
                     print(f'Окно {window_id} закрыто, перезапускаю...')
-                    try:
-                        driver.quit() # Пытаемся закрыть драйвер, если он был создан
-                    except:
-                        pass # Игнорируем ошибки при закрытии
-                    driver = None # Обнуляем драйвер перед следующей попыткой
-                    continue # Переходим к следующей итерации внешнего цикла для перезапуска
-                else:
-                    # Если ошибка не связана с недоступностью Chrome, возможно, это более серьезная проблема.
-                    # Выводим ошибку и завершаем работу потока.
-                    print(f'Критическая ошибка в окне {window_id}. Завершение работы потока.')
-                    if driver:
-                        try:
-                            driver.quit()
-                        except:
-                            pass
+                    try: driver.quit()
+                    except: pass
                     driver = None
-                    break # Выход из внешнего цикла
+                    continue
+                else:
+                    print(f'Критическая ошибка при запуске окна {window_id}. Завершение работы потока.')
+                    if driver:
+                        try: driver.quit()
+                        except: pass
+                    driver = None
+                    self.stop_event.set() # Устанавливаем событие остановки для всех потоков при критической ошибке
+                    break
 
-        # Этот код выполняется после выхода из внешнего цикла (когда self.stop_event.is_set() становится True)
-        # Или при критической ошибке, которая привела к break из внешнего цикла
+
+        # Этот код выполняется после выхода из внешнего цикла
         if driver:
             try:
                 driver.quit()
                 print(f'Браузер окна {window_id} закрыт.')
             except:
-                pass # Игнорируем ошибки при закрытии драйвера после остановки
+                pass
 
     def start_browsers(self):
+        # Проверяем, есть ли уже запущенные потоки
+        if any(t.is_alive() for t in self.threads):
+             print("Браузеры уже запущены.")
+             self.status_label.configure(text='Статус: Уже запущено')
+             return # Не запускаем заново, если уже работает
+
         self.stop_event.clear() # Сбрасываем событие остановки
         urls = [url.strip() for url in self.urls_entry.get('1.0', 'end-1c').split('\n') if url.strip()]
 
@@ -226,14 +363,14 @@ class BrowserController(ctk.CTk):
         self.status_label.configure(text='Статус: Остановка...')
 
         # Ожидаем завершения потоков (с таймаутом)
-        start_time = time.time()
-        # Проходим по копии списка потоков, так как список может меняться
-        for t in list(self.threads):
+        # Создаем копию списка, так как список может меняться при завершении потоков
+        active_threads_at_stop = list(self.threads)
+        for t in active_threads_at_stop:
              if t.is_alive():
-                 # join с таймаутом предотвращает зависание, если поток не завершается корректно
-                 t.join(timeout=5)
+                 print(f"Ожидание завершения потока {t.name}...")
+                 t.join(timeout=10) # Увеличиваем таймаут на всякий случай
                  if t.is_alive():
-                     print(f"Поток {t.name} не завершился в течение таймаута.")
+                     print(f"Предупреждение: Поток {t.name} не завершился в течение таймаута.")
 
         self.threads.clear() # Очищаем список потоков после попытки остановки
 
@@ -245,7 +382,26 @@ class BrowserController(ctk.CTk):
         self.stop_browsers() # Останавливаем браузеры при закрытии окна GUI
         self.destroy() # Закрываем окно GUI
 
+# --- Главная точка входа ---
 if __name__ == '__main__':
+    # Создаем корневое окно Tkinter, которое будет скрыто
+    root = ctk.CTk()
+    root.withdraw() # Скрываем корневое окно
 
-    app = BrowserController()
-    app.mainloop()
+    # Создаем окно для ввода пароля
+    password_window = PasswordWindow(root)
+    # Ждем, пока окно пароля не будет закрыто
+    root.wait_window(password_window)
+
+    # Проверяем, был ли пароль введен правильно перед закрытием окна пароля
+    # Переменная password_correct устанавливается в PasswordWindow
+    if password_window.password_correct:
+        # Если пароль правильный, создаем и запускаем основное приложение
+        app = BrowserController()
+        app.mainloop()
+    else:
+        # Если пароль не правильный (или окно пароля было просто закрыто),
+        # root.destroy() уже вызван в on_closing PasswordWindow,
+        # поэтому просто завершаем выполнение скрипта.
+        print("Ввод пароля отменен или пароль неверный. Приложение не запущено.")
+
