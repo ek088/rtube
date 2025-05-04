@@ -116,7 +116,7 @@ class BrowserController(ctk.CTk):
                         # Оставляем как в декомпилированном коде, но имейте в виду.
                         for handle in driver.window_handles:
                             driver.switch_to.window(handle)
-                            driver.refresh()
+                            driver.get(current_url)
                             # print(f'Окно {window_id} обновлено') # Печать в цикле может быть избыточной
 
                         print(f'Окно {window_id} обновлено') # Печатаем один раз после всех обновлений
@@ -246,12 +246,6 @@ class BrowserController(ctk.CTk):
         self.destroy() # Закрываем окно GUI
 
 if __name__ == '__main__':
-    # Проверка наличия chromedriver в PATH может быть полезна перед запуском
-    # try:
-    #     subprocess.run(['chromedriver', '--version'], check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-    # except (subprocess.CalledProcessError, FileNotFoundError):
-    #     print("Ошибка: chromedriver не найден в PATH. Пожалуйста, установите его и добавьте в PATH.")
-    #     sys.exit(1)
 
     app = BrowserController()
     app.mainloop()
