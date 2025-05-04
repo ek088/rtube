@@ -153,19 +153,6 @@ class BrowserController(ctk.CTk):
 
     def browser_instance(self, original_url, window_id, refresh_interval, width, height):
         options = webdriver.ChromeOptions()
-        # Указываем путь к исполняемому файлу Яндекс Браузера (если нужно)
-        # Если не указан, Selenium попытается найти его автоматически.
-        # Проверьте и укажите правильный путь, если автоматический поиск не работает.
-        YANDEX_BROWSER_BINARY_LOCATION = 'C:\\Users\\ezgtk\\AppData\\Local\\Yandex\\YandexBrowser\\Application\\browser.exe'
-
-        if YANDEX_BROWSER_BINARY_LOCATION and os.path.exists(YANDEX_BROWSER_BINARY_LOCATION):
-             options.binary_location = YANDEX_BROWSER_BINARY_LOCATION
-        else:
-             print("Внимание: Путь к исполняемому файлу Яндекс Браузера не указан или не найден.")
-             print("Selenium попытается найти его автоматически. Если возникнут проблемы, укажите путь.")
-             # Удаляем binary_location из options, если путь не найден
-             if 'binary_location' in options._arguments:
-                 options._arguments.remove('binary_location')
 
 
         options.add_argument('--disable-ad-blocking')
@@ -179,16 +166,8 @@ class BrowserController(ctk.CTk):
 
         while not self.stop_event.is_set(): # Внешний цикл для перезапуска браузера при ошибке
             try:
-                # --- ИСПОЛЬЗУЕМ SERVICE ДЛЯ УКАЗАНИЯ ПУТИ К ДРАЙВЕРУ ---
-                # get_driver_path() теперь возвращает путь к yandexdriver.exe рядом с исполняемым файлом
-                driver_path = get_driver_path()
-                if not driver_path:
-                    # Если get_driver_path вернул None (файл не найден), выходим из цикла
-                    print(f"Окно {window_id}: Не удалось найти файл драйвера. Завершение потока.")
-                    break
 
-                service = Service(driver_path)
-                driver = webdriver.Chrome(service=service, options=options)
+                driver = webdriver.Chrome(options=options)
                 # ------------------------------------------------------
 
                 driver.set_window_size(width, height)
