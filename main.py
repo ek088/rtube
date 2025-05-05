@@ -9,7 +9,21 @@ from selenium.webdriver.chrome.options import Options
 from selenium.common.exceptions import WebDriverException
 
 # Настройка логирования
-logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
+# Используем базовую настройку, чтобы получить стандартный консольный обработчик
+# Затем добавим файловый обработчик для ошибок
+logging.basicConfig(
+    level=logging.INFO, # Общий минимальный уровень для логгера и консоли
+    format='%(asctime)s - %(levelname)s - %(message)s'
+)
+
+# Создаем файловый обработчик для ошибок
+error_file_handler = logging.FileHandler('logs.txt', encoding='utf-8')
+error_file_handler.setLevel(logging.ERROR) # Устанавливаем уровень для файла
+error_file_handler.setFormatter(logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')) # Формат для файла (можно сделать другим)
+
+# Получаем корневой логгер и добавляем файловый обработчик
+root_logger = logging.getLogger()
+root_logger.addHandler(error_file_handler)
 
 # Список для хранения всех активных драйверов
 active_drivers = []
@@ -23,75 +37,70 @@ class BrowserWatcher(threading.Thread):
         self.url_list = url_list
         self.refresh_interval = refresh_interval
         self.window_size = window_size
-        self.is_headless = is_headless # Сохраняем состояние headless
+        self.is_headless = is_headless
         self.thread_id = thread_id
         self.driver = None
         self._stop_event = threading.Event()
         self.current_url_index = 0
+        # Логгер для потока (добавляем имя потока в лог)
+        self.logger = logging.getLogger(f'Thread-{self.thread_id}')
+
 
     def run(self):
         """Метод, выполняемый при запуске потока."""
-        logging.info(f"Поток {self.thread_id} стартовал.")
+        self.logger.info("Поток стартовал.")
 
         try:
-            # Инициализация драйвера для этого потока, передавая состояние headless
             self.driver = setup_driver(self.window_size, self.is_headless)
             active_drivers.append(self.driver)
-            logging.info(f"Поток {self.thread_id}: Драйвер инициализирован (headless: {self.is_headless}).")
+            self.logger.info(f"Драйвер инициализирован (headless: {self.is_headless}).")
 
-            # Открываем первую ссылку
             if not self.url_list:
-                logging.warning(f"Поток {self.thread_id}: Список ссылок пуст.")
-                return # Завершаем поток, если нет ссылок
+                self.logger.warning("Список ссылок пуст.")
+                return
 
             initial_url = self.url_list[self.current_url_index]
             self.driver.get(initial_url)
-            logging.info(f"Поток {self.thread_id}: Открыта начальная ссылка: {initial_url}")
+            self.logger.info(f"Открыта начальная ссылка: {initial_url}")
 
-            # Основной цикл обновления
             while not self._stop_event.is_set():
-                # Переходим к следующей ссылке
                 self.current_url_index = (self.current_url_index + 1) % len(self.url_list)
                 next_url = self.url_list[self.current_url_index]
 
                 try:
-                    # Задержка перед обновлением
                     if self._stop_event.wait(self.refresh_interval):
-                        logging.info(f"Поток {self.thread_id}: Получен сигнал остановки, завершение ожидания.")
-                        break # Выходим из цикла
+                        self.logger.info("Получен сигнал остановки, завершение ожидания.")
+                        break
 
-                    # Выполняем обновление
                     self.driver.get(next_url)
-                    logging.info(f"Поток {self.thread_id}: Обновлено, перешли на ссылку: {next_url}")
+                    self.logger.info(f"Обновлено, перешли на ссылку: {next_url}")
 
                 except WebDriverException as e:
-                    logging.error(f"Поток {self.thread_id}: Ошибка Selenium при обновлении на {next_url}: {e}")
-                    logging.warning(f"Поток {self.thread_id}: Завершение работы из-за ошибки Selenium.")
+                    self.logger.error(f"Ошибка Selenium при обновлении на {next_url}: {e}")
+                    self.logger.warning("Завершение работы из-за ошибки Selenium.")
                     break
                 except Exception as e:
-                    logging.error(f"Поток {self.thread_id}: Непредвиденная ошибка: {e}")
-                    logging.warning(f"Поток {self.thread_id}: Завершение работы из-за непредвиденной ошибки.")
+                    self.logger.error(f"Непредвиденная ошибка: {e}")
+                    self.logger.warning("Завершение работы из-за непредвиденной ошибки.")
                     break
 
         except Exception as e:
-            logging.error(f"Поток {self.thread_id}: Ошибка при инициализации драйвера или первой загрузке: {e}")
+            self.logger.error(f"Ошибка при инициализации драйвера или первой загрузке: {e}")
 
         finally:
-            # Убедимся, что драйвер закрыт при завершении потока
             if self.driver:
                 try:
                     self.driver.quit()
-                    logging.info(f"Поток {self.thread_id}: Драйвер закрыт.")
+                    self.logger.info("Драйвер закрыт.")
                     if self.driver in active_drivers:
                          active_drivers.remove(self.driver)
                 except Exception as e:
-                    logging.error(f"Поток {self.thread_id}: Ошибка при закрытии драйвера: {e}")
+                    self.logger.error(f"Ошибка при закрытии драйвера: {e}")
 
-            logging.info(f"Поток {self.thread_id} завершен.")
+            self.logger.info("Поток завершен.")
 
     def stop(self):
-        """Сигнализирует потоку о необходимости завершения."""
-        logging.info(f"Поток {self.thread_id}: Получен запрос на остановку.")
+        self.logger.info("Получен запрос на остановку.")
         self._stop_event.set()
 
 
@@ -112,25 +121,22 @@ def read_urls_from_file(filepath):
         sys.exit(1)
     return urls
 
-# Функция настройки драйвера, принимает параметр is_headless
 def setup_driver(window_size, is_headless):
     """Настраивает и возвращает экземпляр ChromeDriver."""
     options = Options()
-    if is_headless: # Условное добавление опции headless
-        options.add_argument("--headless=new") # Используйте "--headless=new" для более новых версий Chrome/ChromeDriver
-        # Если у вас более старая версия, используйте просто "--headless"
+    if is_headless:
+        options.add_argument("--headless=new")
         # options.add_argument("--headless")
     options.add_argument("--no-sandbox")
     options.add_argument("--disable-dev-shm-usage")
     options.add_argument(f"--window-size={window_size[0]},{window_size[1]}")
-    # Можете добавить другие опции
 
     try:
         service = Service()
         driver = webdriver.Chrome(service=service, options=options)
         return driver
     except Exception as e:
-        raise e # Позволяем исключению распространиться
+        raise e
 
 def watch_urls(urls, num_windows, refresh_interval, window_size, is_headless):
     """Запускает просмотр URL в нескольких окнах с обновлением, используя потоки."""
@@ -147,7 +153,6 @@ def watch_urls(urls, num_windows, refresh_interval, window_size, is_headless):
     logging.info(f"Создание {num_windows_to_use} потоков для просмотра {len(urls)} ссылок.")
 
     for i in range(num_windows_to_use):
-        # Передаем состояние headless в конструктор BrowserWatcher
         thread = BrowserWatcher(urls, refresh_interval, window_size, is_headless, thread_id=i)
         threads.append(thread)
         thread.start()
@@ -211,17 +216,15 @@ def main():
         type=str,
         help='Путь к файлу, содержащему список URL (одна ссылка на строку)'
     )
-    # Добавляем опциональный флаг headless
     parser.add_argument(
         '-H', '--headless',
-        action='store_true', # Этот аргумент просто устанавливает True, если присутствует
+        action='store_true',
         help='Запустить браузеры в headless режиме (без видимого окна).'
     )
 
 
     args = parser.parse_args()
 
-    # Парсим размер окна
     try:
         width, height = map(int, args.size.split('x'))
         window_size = (width, height)
@@ -234,7 +237,6 @@ def main():
 
     logging.info(f"Параметры запуска: Windows={args.windows}, Interval={args.interval}, Size={args.size}, Headless={args.headless}")
 
-    # Передаем значение args.headless в watch_urls
     watch_urls(urls, args.windows, args.interval, window_size, args.headless)
 
 if __name__ == "__main__":
