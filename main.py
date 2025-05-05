@@ -1,299 +1,267 @@
-import customtkinter as ctk
-from selenium import webdriver
-from selenium.common.exceptions import WebDriverException
-from threading import Thread, Event
+import argparse
+import logging
 import time
 import sys
-import logging
-import os
-import argparse
+import threading # Добавляем импорт для работы с потоками
+
+from selenium import webdriver
 from selenium.webdriver.chrome.service import Service
+from selenium.webdriver.chrome.options import Options
+from selenium.common.exceptions import WebDriverException # Импортируем исключения Selenium
 
-ctk.set_appearance_mode('dark')
-ctk.set_default_color_theme('blue')
+# Настройка логирования
+logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 
-class BrowserController(ctk.CTk):
-    def __init__(self):
-        super().__init__()
-        self.title('Browser Controller')
-        # Устанавливаем начальный размер окна.
-        # Возможно, его нужно будет скорректировать в зависимости от содержимого.
-        self.geometry('600x500')
-        self.stop_event = Event()
-        self.threads = []
-        self.url_map = {}
-        self.create_widgets()
-        self.protocol('WM_DELETE_WINDOW', self.on_close)
+# Список для хранения всех активных драйверов, чтобы можно было их закрыть при выходе
+active_drivers = []
+# Блокировка для безопасного доступа к списку драйверов, если потребуется
+# driver_list_lock = threading.Lock() # Возможно, не потребуется для данного уровня сложности
 
-    def create_widgets(self):
-        main_frame = ctk.CTkFrame(self)
-        main_frame.pack(pady=10, padx=10, fill='both', expand=True)
+class BrowserWatcher(threading.Thread):
+    """
+    Поток, управляющий одним окном браузера и его циклом обновления.
+    """
+    def __init__(self, url_list, refresh_interval, window_size, thread_id):
+        threading.Thread.__init__(self)
+        self.url_list = url_list
+        self.refresh_interval = refresh_interval
+        self.window_size = window_size
+        self.thread_id = thread_id
+        self.driver = None
+        self._stop_event = threading.Event() # Событие для сигнализации потоку о завершении
+        self.current_url_index = 0
 
-        ctk.CTkLabel(main_frame, text='Введите ссылки (каждая с новой строки):').pack(pady=5)
-        self.urls_entry = ctk.CTkTextbox(main_frame, height=150)
-        self.urls_entry.pack(pady=5, padx=10, fill='x')
+    def run(self):
+        """Метод, выполняемый при запуске потока."""
+        logging.info(f"Поток {self.thread_id} стартовал.")
 
-        settings_frame = ctk.CTkFrame(main_frame, fg_color='transparent')
-        settings_frame.pack(pady=5, fill='x', expand=True)
+        try:
+            # Инициализация драйвера для этого потока
+            self.driver = setup_driver(self.window_size)
+            # with driver_list_lock: # Если нужно блокировать доступ к списку
+            active_drivers.append(self.driver)
+            logging.info(f"Поток {self.thread_id}: Драйвер инициализирован.")
 
-        left_col = ctk.CTkFrame(settings_frame, fg_color='transparent')
-        left_col.pack(side='left', fill='x', expand=True)
+            # Открываем первую ссылку
+            if not self.url_list:
+                logging.warning(f"Поток {self.thread_id}: Список ссылок пуст.")
+                return # Завершаем поток, если нет ссылок
 
-        right_col = ctk.CTkFrame(settings_frame, fg_color='transparent')
-        right_col.pack(side='right', fill='x', expand=True)
+            initial_url = self.url_list[self.current_url_index]
+            self.driver.get(initial_url)
+            logging.info(f"Поток {self.thread_id}: Открыта начальная ссылка: {initial_url}")
 
-        ctk.CTkLabel(left_col, text='Количество окон:').pack(anchor='w')
-        self.window_count = ctk.CTkEntry(left_col, placeholder_text='По умолчанию: 4')
-        self.window_count.pack(pady=5, fill='x')
+            # Основной цикл обновления
+            while not self._stop_event.is_set(): # Проверяем, нужно ли завершить работу
+                # Переходим к следующей ссылке
+                self.current_url_index = (self.current_url_index + 1) % len(self.url_list)
+                next_url = self.url_list[self.current_url_index]
 
-        ctk.CTkLabel(left_col, text='Интервал обновления (сек):').pack(anchor='w')
-        self.refresh_entry = ctk.CTkEntry(left_col, placeholder_text='По умолчанию: 2.5')
-        self.refresh_entry.pack(pady=5, fill='x')
+                try:
+                    # Задержка перед обновлением. Используем wait() с timeout,
+                    # чтобы можно было прервать ожидание при получении сигнала завершения
+                    if self._stop_event.wait(self.refresh_interval):
+                        logging.info(f"Поток {self.thread_id}: Получен сигнал остановки, завершение ожидания.")
+                        break # Выходим из цикла, если получили сигнал остановки
 
-        ctk.CTkLabel(right_col, text='Размер окна (ширина x высота):').pack(anchor='w')
-        size_frame = ctk.CTkFrame(right_col, fg_color='transparent')
-        size_frame.pack(pady=5, fill='x')
+                    # Выполняем обновление
+                    self.driver.get(next_url)
+                    logging.info(f"Поток {self.thread_id}: Обновлено, перешли на ссылку: {next_url}")
 
-        self.width_entry = ctk.CTkEntry(size_frame, placeholder_text='860', width=70)
-        self.width_entry.pack(side='left', padx=2)
-        ctk.CTkLabel(size_frame, text='x').pack(side='left', padx=2)
-        self.height_entry = ctk.CTkEntry(size_frame, placeholder_text='700', width=70)
-        self.height_entry.pack(side='left', padx=2)
+                except WebDriverException as e:
+                    logging.error(f"Поток {self.thread_id}: Ошибка Selenium при обновлении на {next_url}: {e}")
+                    # В случае ошибки Selenium, возможно, стоит попытаться продолжить
+                    # Или закрыть этот конкретный драйвер и завершить поток?
+                    # Для простоты при ошибке этого окна, завершаем только его поток.
+                    logging.warning(f"Поток {self.thread_id}: Завершение работы из-за ошибки Selenium.")
+                    break # Выходим из цикла при ошибке Selenium
+                except Exception as e:
+                    logging.error(f"Поток {self.thread_id}: Непредвиденная ошибка: {e}")
+                    logging.warning(f"Поток {self.thread_id}: Завершение работы из-за непредвиденной ошибки.")
+                    break # Выходим из цикла при другой ошибке
 
-        button_frame = ctk.CTkFrame(main_frame)
-        button_frame.pack(pady=10)
+        except Exception as e:
+            logging.error(f"Поток {self.thread_id}: Ошибка при инициализации драйвера или первой загрузке: {e}")
 
-        self.start_btn = ctk.CTkButton(button_frame, text='Запустить', command=self.start_browsers, fg_color='green', hover_color='dark green')
-        self.start_btn.pack(side='left', padx=10)
+        finally:
+            # Убедимся, что драйвер закрыт при завершении потока
+            if self.driver:
+                try:
+                    self.driver.quit()
+                    logging.info(f"Поток {self.thread_id}: Драйвер закрыт.")
+                    # with driver_list_lock:
+                    if self.driver in active_drivers:
+                         active_drivers.remove(self.driver)
+                except Exception as e:
+                    logging.error(f"Поток {self.thread_id}: Ошибка при закрытии драйвера: {e}")
 
-        self.stop_btn = ctk.CTkButton(button_frame, text='Остановить', command=self.stop_browsers, fg_color='red', hover_color='dark red', state='disabled')
-        self.stop_btn.pack(side='right', padx=10)
+            logging.info(f"Поток {self.thread_id} завершен.")
 
-        self.status_label = ctk.CTkLabel(main_frame, text='Статус: Остановлено')
-        self.status_label.pack(pady=5)
-
-
-    def browser_instance(self, original_url, window_id, refresh_interval, width, height):
-        options = webdriver.ChromeOptions()
-
-
-        options.add_argument('--disable-ad-blocking')
-        options.add_argument('--disable-extensions')
-        options.add_argument('--disable-notifications')
-        options.add_argument('--mute-audio')
-        options.add_argument('--disable-blink-features=AutomationControlled')
-        # options.add_argument('--headless') # Если хотите запускать в фоновом режиме
-
-        driver = None
-
-        while not self.stop_event.is_set(): # Внешний цикл для перезапуска браузера при ошибке
-            try:
-                # --- ИСПОЛЬЗУЕМ SERVICE ДЛЯ УКАЗАНИЯ ПУТИ К ДРАЙВЕРУ ---
-                # get_driver_path() теперь возвращает путь к yandexdriver.exe рядом с исполняемым файлом
-                driver_path = get_driver_path()
-                if not driver_path:
-                    # Если get_driver_path вернул None (файл не найден), выходим из цикла
-                    print(f"Окно {window_id}: Не удалось найти файл драйвера. Завершение потока.")
-                    break
-
-                service = Service(driver_path)
-                driver = webdriver.Chrome(service=service, options=options)
-                # ------------------------------------------------------
-
-                driver.set_window_size(width, height)
-                driver.get(original_url)
-                self.url_map[window_id] = original_url
-                print(f'Окно {window_id} запущено с URL: {original_url} в Яндекс Браузере')
-
-                # Внутренний цикл для обновления страницы, пока не получена команда остановки
-                while not self.stop_event.is_set():
-                    try:
-                        current_url = driver.current_url
-                        if current_url != original_url:
-                            print(f'Обнаружен измененный URL в окне {window_id}. Возвращаю исходный...')
-                            driver.get(original_url)
-                            time.sleep(2)
-
-                        # Обновление всех окон/вкладок
-                        for handle in driver.window_handles:
-                            driver.switch_to.window(handle)
-                            driver.get(current_url)
-
-                        print(f'Окно {window_id} обновлено')
-
-                        time.sleep(refresh_interval)
-
-                    except WebDriverException as e:
-                        print(f'WebDriverException в окне {window_id}: {str(e)}')
-                        # Проверяем специфическую ошибку несовместимости версий
-                        if "session not created: This version of ChromeDriver only supports" in str(e):
-                            print(f"Окно {window_id}: ОШИБКА СОВМЕСТИМОСТИ ВЕРСИЙ! YandexDriver несовместим с версией Яндекс Браузера.")
-                            try:
-                                browser_version_info = str(e).split('Current browser version is ')[1]
-                                browser_version = browser_version_info.split(' ')[0]
-                                print(f"Требуется YandexDriver для версии браузера {browser_version}")
-                            except:
-                                print("Не удалось определить версию браузера из сообщения об ошибке.")
-                            print("Пожалуйста, скачайте совместимый YandexDriver с https://yandex.ru/dev/browser/driver/")
-                            if driver:
-                                try: driver.quit()
-                                except: pass
-                            driver = None
-                            self.stop_event.set() # Устанавливаем событие остановки для всех потоков при этой ошибке
-                            break # Завершаем поток
-                        elif driver and 'not reachable' in str(e).lower():
-                            print(f'Окно {window_id} закрыто, перезапускаю...')
-                            try: driver.quit()
-                            except: pass
-                            driver = None
-                            continue # Переходим к следующей итерации для перезапуска
-                        else:
-                            print(f'Критическая WebDriverException в окне {window_id}. Завершение работы потока.')
-                            if driver:
-                                try: driver.quit()
-                                except: pass
-                            driver = None
-                            self.stop_event.set() # Устанавливаем событие остановки для всех потоков при критической ошибке
-                            break
-
-                    except Exception as e:
-                         print(f'Неизвестная ошибка в окне {window_id} во внутреннем цикле: {str(e)}')
-                         if driver:
-                             try: driver.quit()
-                             except: pass
-                         driver = None
-                         self.stop_event.set() # Устанавливаем событие остановки для всех потоков при неизвестной ошибке
-                         break
-
-            except Exception as e:
-                print(f'Ошибка при запуске/работе окна {window_id}: {str(e)}')
-                # Проверяем специфическую ошибку несовместимости версий при запуске
-                if "session not created: This version of ChromeDriver only supports" in str(e):
-                     print(f"Окно {window_id}: ОШИБКА СОВМЕСТИМОСТИ ВЕРСИЙ ПРИ ЗАПУСКЕ! YandexDriver несовместим с версией Яндекс Браузера.")
-                     try:
-                         browser_version_info = str(e).split('Current browser version is ')[1]
-                         browser_version = browser_version_info.split(' ')[0]
-                         print(f"Требуется YandexDriver для версии браузера {browser_version}")
-                     except:
-                         print("Не удалось определить версию браузера из сообщения об ошибке.")
-                     print("Пожалуйста, скачайте совместимый YandexDriver с https://yandex.ru/dev/browser/driver/")
-                     if driver:
-                        try: driver.quit()
-                        except: pass
-                     driver = None
-                     self.stop_event.set() # Устанавливаем событие остановки для всех потоков при этой ошибке
-                     break # Завершаем поток
-                elif driver and 'not reachable' in str(e).lower():
-                    print(f'Окно {window_id} закрыто, перезапускаю...')
-                    try: driver.quit()
-                    except: pass
-                    driver = None
-                    continue
-                else:
-                    print(f'Критическая ошибка при запуске окна {window_id}. Завершение работы потока.')
-                    if driver:
-                        try: driver.quit()
-                        except: pass
-                    driver = None
-                    self.stop_event.set() # Устанавливаем событие остановки для всех потоков при критической ошибке
-                    break
+    def stop(self):
+        """Сигнализирует потоку о необходимости завершения."""
+        logging.info(f"Поток {self.thread_id}: Получен запрос на остановку.")
+        self._stop_event.set()
+        # Попытка закрыть драйвер может помочь потоку быстрее завершиться,
+        # но может вызвать исключение, если драйвер уже в плохом состоянии.
+        # Можно попробовать добавить здесь driver.quit() с try/except.
+        # try:
+        #     if self.driver:
+        #          self.driver.quit()
+        # except Exception as e:
+        #     logging.warning(f"Поток {self.thread_id}: Ошибка при попытке закрыть драйвер при остановке: {e}")
 
 
-        # Этот код выполняется после выхода из внешнего цикла
-        if driver:
+def read_urls_from_file(filepath):
+    """Читает список URL из файла."""
+    urls = []
+    try:
+        with open(filepath, 'r', encoding='utf-8') as f:
+            for line in f:
+                url = line.strip()
+                if url:  # Игнорируем пустые строки
+                    urls.append(url)
+    except FileNotFoundError:
+        logging.error(f"Файл с ссылками не найден: {filepath}")
+        sys.exit(1)
+    except Exception as e:
+        logging.error(f"Ошибка при чтении файла с ссылками {filepath}: {e}")
+        sys.exit(1)
+    return urls
+
+# Упрощенная функция настройки драйвера (без webdriver-manager)
+def setup_driver(window_size):
+    """Настраивает и возвращает экземпляр ChromeDriver."""
+    options = Options()
+    # Для работы в консоли часто не нужна видимость окна браузера
+    # options.add_argument("--headless") # Закомментировано для видимости окон
+    options.add_argument("--no-sandbox")
+    options.add_argument("--disable-dev-shm-usage")
+    options.add_argument(f"--window-size={window_size[0]},{window_size[1]}")
+    # Можете добавить другие опции, например, User-Agent
+
+    try:
+        # Использование Service без явного указания executable_path.
+        # Selenium попробует найти chromedriver в PATH или других стандартных местах.
+        service = Service()
+        driver = webdriver.Chrome(service=service, options=options)
+        return driver
+    except Exception as e:
+        # Логирование ошибки инициализации драйвера происходит в потоке или main,
+        # в зависимости от того, где происходит вызов setup_driver.
+        # Здесь просто возбуждаем исключение, чтобы вызывающий код его поймал.
+        raise e # Позволяем исключению распространиться
+
+def watch_urls(urls, num_windows, refresh_interval, window_size):
+    """Запускает просмотр URL в нескольких окнах с обновлением, используя потоки."""
+    if not urls:
+        logging.warning("Нет ссылок для просмотра.")
+        return
+
+    # Ограничиваем количество окон количеством доступных ссылок
+    num_windows_to_use = min(num_windows, len(urls))
+    if num_windows_to_use == 0:
+        logging.warning("Нет доступных ссылок для открытия окон.")
+        return
+
+    threads = []
+    logging.info(f"Создание {num_windows_to_use} потоков для просмотра {len(urls)} ссылок.")
+
+    for i in range(num_windows_to_use):
+        # Создаем подмножество URL для каждого потока, если нужно
+        # В данном случае каждый поток будет циклически перебирать ВЕСЬ список URL
+        thread = BrowserWatcher(urls, refresh_interval, window_size, thread_id=i)
+        threads.append(thread)
+        # Можно установить поток как демон, чтобы он завершился автоматически
+        # при завершении основной программы, но это не гарантирует аккуратное закрытие драйверов.
+        # thread.daemon = True
+        thread.start()
+
+    logging.info("Все потоки запущены.")
+
+    try:
+        # Основной поток просто ждет сигнала прерывания (Ctrl+C)
+        # Или вы можете добавить логику для Join всех потоков, если они должны завершаться сами
+        # Например, если список ссылок конечен и каждое окно проходит его один раз.
+        # Но в вашем случае, кажется, они должны работать постоянно.
+        while True:
+            time.sleep(1) # Делаем небольшую задержку, чтобы не загружать CPU
+            # Проверяем, остались ли активные драйверы/потоки
+            # if not active_drivers:
+            #     logging.warning("Все драйверы закрылись. Завершение работы.")
+            #     break # Выходим из цикла, если все окна закрылись
+
+    except KeyboardInterrupt:
+        logging.info("Получен сигнал прерывания (Ctrl+C). Инициирую завершение потоков.")
+        # При получении Ctrl+C, просим каждый поток остановиться
+        for thread in threads:
+            thread.stop()
+
+        # Ждем завершения всех потоков (или таймаут)
+        logging.info("Ожидание завершения потоков...")
+        for thread in threads:
+             # Можно использовать thread.join(timeout) для установки таймаута
+             thread.join() # Ждем бесконечно, пока поток не завершится сам
+
+    finally:
+        # Убеждаемся, что все драйверы закрыты в конце, даже если что-то пошло не так
+        # в логике остановки потоков.
+        logging.info("Закрытие оставшихся драйверов.")
+        # Итерируемся по копии списка active_drivers
+        for driver in list(active_drivers):
             try:
                 driver.quit()
-                print(f'Браузер окна {window_id} закрыт.')
-            except:
-                pass
+                # with driver_list_lock:
+                if driver in active_drivers:
+                     active_drivers.remove(driver)
+            except Exception as e:
+                logging.error(f"Ошибка при закрытии драйвера в finally блоке: {e}")
 
-    def start_browsers(self):
-        # Проверяем, есть ли уже запущенные потоки
-        if any(t.is_alive() for t in self.threads):
-             print("Браузеры уже запущены.")
-             self.status_label.configure(text='Статус: Уже запущено')
-             return # Не запускаем заново, если уже работает
-
-        self.stop_event.clear() # Сбрасываем событие остановки
-        urls = [url.strip() for url in self.urls_entry.get('1.0', 'end-1c').split('\n') if url.strip()]
-
-        if not urls:
-            self.status_label.configure(text='Ошибка: введите хотя бы одну ссылку!')
-            return
-
-        # Обработка ввода количества окон
-        try:
-            num_windows_str = self.window_count.get().strip()
-            num_windows = int(num_windows_str) if num_windows_str else 4
-            if num_windows <= 0:
-                 raise ValueError("Количество окон должно быть больше нуля")
-        except ValueError:
-            self.status_label.configure(text='Ошибка: некорректное число окон!')
-            return
-
-        # Обработка ввода интервала обновления
-        try:
-            refresh_interval_str = self.refresh_entry.get().strip()
-            refresh_interval = float(refresh_interval_str) if refresh_interval_str else 2.5
-            if refresh_interval <= 0:
-                 raise ValueError("Интервал обновления должен быть больше нуля")
-        except ValueError:
-            self.status_label.configure(text='Ошибка: некорректный интервал обновления!')
-            return
-
-        # Обработка ввода размера окна
-        try:
-            width_str = self.width_entry.get().strip()
-            width = int(width_str) if width_str else 860
-            height_str = self.height_entry.get().strip()
-            height = int(height_str) if height_str else 700
-            if width <= 0 or height <= 0:
-                 raise ValueError("Размеры окна должны быть больше нуля")
-        except ValueError:
-            self.status_label.configure(text='Ошибка: некорректный размер окна!')
-            return
-
-        # Очищаем список потоков перед запуском
-        self.threads.clear()
-
-        # Запускаем потоки браузеров
-        for i in range(num_windows):
-            url = urls[i % len(urls)] # Циклически используем URL, если окон больше, чем ссылок
-            thread = Thread(target=self.browser_instance, args=(url, i + 1, refresh_interval, width, height), daemon=True)
-            self.threads.append(thread)
-            thread.start()
-
-        self.start_btn.configure(state='disabled')
-        self.stop_btn.configure(state='normal')
-        self.status_label.configure(text=f'Статус: Запущено {len(self.threads)} окон')
-
-    def stop_browsers(self):
-        self.stop_event.set() # Устанавливаем событие остановки
-        self.status_label.configure(text='Статус: Остановка...')
-
-        # Ожидаем завершения потоков (с таймаутом)
-        # Создаем копию списка, так как список может меняться при завершении потоков
-        active_threads_at_stop = list(self.threads)
-        for t in active_threads_at_stop:
-             if t.is_alive():
-                 print(f"Ожидание завершения потока {t.name}...")
-                 t.join(timeout=10) # Увеличиваем таймаут на всякий случай
-                 if t.is_alive():
-                     print(f"Предупреждение: Поток {t.name} не завершился в течение таймаута.")
-
-        self.threads.clear() # Очищаем список потоков после попытки остановки
-
-        self.start_btn.configure(state='normal')
-        self.stop_btn.configure(state='disabled')
-        self.status_label.configure(text='Статус: Остановлено')
-
-    def on_close(self):
-        self.stop_browsers() # Останавливаем браузеры при закрытии окна GUI
-        self.destroy() # Закрываем окно GUI
-
-# --- Главная точка входа ---
-if __name__ == '__main__':
-    app = BrowserController()
-    app.mainloop()
+        logging.info("Программа завершена.")
 
 
+def main():
+    """Основная функция для парсинга аргументов и запуска просмотра."""
+    parser = argparse.ArgumentParser(description='Программа для просмотра веб-страниц в нескольких окнах с обновлением.')
+    parser.add_argument(
+        '-w', '--windows',
+        type=int,
+        default=4,
+        help='Количество окон для просмотра (по умолчанию: 4)'
+    )
+    parser.add_argument(
+        '-i', '--interval',
+        type=int,
+        default=3,
+        help='Интервал обновления страниц в секундах (по умолчанию: 3)'
+    )
+    parser.add_argument(
+        '-s', '--size',
+        type=str,
+        default='350x350',
+        help='Размер окна браузера в формате ШИРИНАxВЫСОТА (по умолчанию: 350x350)'
+    )
+    parser.add_argument(
+        'urls_file',
+        type=str,
+        help='Путь к файлу, содержащему список URL (одна ссылка на строку)'
+    )
+
+    args = parser.parse_args()
+
+    # Парсим размер окна
+    try:
+        width, height = map(int, args.size.split('x'))
+        window_size = (width, height)
+    except ValueError:
+        logging.error(f"Неверный формат размера окна: {args.size}. Используйте формат ШИРИНАxВЫСОТА (например, 800x600).")
+        sys.exit(1)
+
+    logging.info(f"Чтение ссылок из файла: {args.urls_file}")
+    urls = read_urls_from_file(args.urls_file)
+
+    logging.info(f"Параметры запуска: Windows={args.windows}, Interval={args.interval}, Size={args.size}")
+
+    watch_urls(urls, args.windows, args.interval, window_size)
+
+if __name__ == "__main__":
+    main()
