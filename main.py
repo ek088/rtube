@@ -144,18 +144,18 @@ def watch_urls(urls, num_windows, refresh_interval, window_size, is_headless):
         logging.warning("Нет ссылок для просмотра.")
         return
 
-    num_windows_to_use = min(num_windows, len(urls))
-    if num_windows_to_use == 0:
+    if len(urls) == 0:
         logging.warning("Нет доступных ссылок для открытия окон.")
         return
 
     threads = []
-    logging.info(f"Создание {num_windows_to_use} потоков для просмотра {len(urls)} ссылок.")
+    logging.info(f"Создание {num_windows} потоков для просмотра {len(urls)} ссылок.")
 
-    for i in range(num_windows_to_use):
+    for i in range(num_windows):
         thread = BrowserWatcher(urls, refresh_interval, window_size, is_headless, thread_id=i)
         threads.append(thread)
         thread.start()
+        time.sleep(2)
 
     logging.info("Все потоки запущены.")
     if is_headless:
