@@ -130,6 +130,11 @@ def setup_driver(window_size, is_headless):
     options.add_argument("--no-sandbox")
     options.add_argument("--disable-dev-shm-usage")
     options.add_argument(f"--window-size={window_size[0]},{window_size[1]}")
+    options.add_argument('--disable-ad-blocking')
+    options.add_argument('--disable-extensions')
+    options.add_argument('--disable-notifications')
+    options.add_argument('--mute-audio')
+    options.add_argument('--disable-blink-features=AutomationControlled')
 
     try:
         service = Service()
