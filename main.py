@@ -62,6 +62,8 @@ class BrowserWatcher(threading.Thread):
                      active_drivers.append(self.driver)
                      self.logger.info(f"Драйвер инициализирован (headless: {self.is_headless}).")
 
+                     self.driver.set_window_position(random.randint(20, 600), random.randint(20, 600))
+
                      # Открываем первую ссылку после успешной инициализации нового драйвера
                      if not self.url_list:
                          self.logger.warning("Список ссылок пуст.")
