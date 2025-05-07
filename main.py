@@ -3,33 +3,29 @@ import logging
 import asyncio
 import sys
 import random
+import time
+from typing import Optional
+
 from playwright.async_api import async_playwright, Playwright, Browser, Page, Error
 
-# Настройка логирования
 logging.basicConfig(
     level=logging.INFO,
     format='%(asctime)s - %(levelname)s - %(message)s'
 )
 
-# Создаем файловый обработчик для ошибок, ЯВНО УКАЗЫВАЯ КОДИРОВКУ UTF-8
 error_file_handler = logging.FileHandler('logs.txt', encoding='utf-8')
 error_file_handler.setLevel(logging.ERROR)
 error_file_handler.setFormatter(logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s'))
 
-# Получаем корневой логгер и добавляем файловый обработчик
 root_logger = logging.getLogger()
 root_logger.addHandler(error_file_handler)
 
-# Список активных страниц (в Playwright мы работаем с страницами, а не с драйверами напрямую)
 active_pages = []
-# Используем asyncio.Lock для безопасного доступа к active_pages
 pages_lock = asyncio.Lock()
 
 class PageWatcher:
-    """
-    Класс, управляющий одной страницей браузера Playwright и ее циклом обновления.
-    Перезапускает страницу/браузер в случае ошибки.
-    """
+    ads_watched = 0
+    reloads_count = 0
     def __init__(self, playwright_instance: Playwright, url_list, refresh_interval, window_size, is_headless, thread_id):
         self.playwright = playwright_instance
         self.url_list = url_list
@@ -37,9 +33,9 @@ class PageWatcher:
         self.window_size = window_size
         self.is_headless = is_headless
         self.thread_id = thread_id
-        self.browser: Browser = None
-        self.page: Page = None
-        self._stop_event = asyncio.Event() # Используем asyncio.Event для асинхронного прерывания
+        self.browser: Optional[Browser] = None
+        self.page: Optional[Page] = None
+        self._stop_event = asyncio.Event()
         self.current_url_index = 0
         self.logger = logging.getLogger(f'Watcher-{self.thread_id}')
 
@@ -47,112 +43,92 @@ class PageWatcher:
         """Асинхронный метод, выполняемый при запуске наблюдателя страницы."""
         self.logger.info("Наблюдатель страницы стартовал.")
 
-        # Внешний цикл для перезапуска браузера. Продолжается до получения сигнала остановки.
         while not self._stop_event.is_set():
             try:
-                # --- Инициализация браузера и страницы ---
+
                 if self.browser is None or self.page is None:
                     self.logger.info("Попытка инициализации нового браузера и страницы...")
                     self.browser = await self.playwright.chromium.launch(
+                        channel="chrome",
                         headless=self.is_headless,
-                        args=[
-                            "--no-sandbox",
-                            "--disable-dev-shm-usage",
-                            "--disable-gpu", # Важно для headless
-                            "--disable-extensions",
-                            "--disable-notifications",
-                            "--mute-audio",
-                            "--disable-blink-features=AutomationControlled", # Пытается скрыть navigator.webdriver
-                        ]
                     )
-                    # Установка размера окна после запуска браузера
+
                     context = await self.browser.new_context(viewport={'width': self.window_size[0], 'height': self.window_size[1]})
 
                     self.page = await context.new_page()
-
-                    # Установка позиции окна (если не headless)
-                    # В Playwright нет прямого метода set_window_position,
-                    # эта функциональность обычно управляется на уровне операционной системы или фреймворка.
-                    # Для видимого режима, окна могут открываться в случайных местах по умолчанию или
-                    # требовать дополнительных инструментов. Пропускаем эту часть для Playwright.
-                    # if not self.is_headless:
-                    #     pass # Логика для установки позиции окна, если это возможно
 
                     async with pages_lock:
                         active_pages.append(self.page)
 
                     self.logger.info(f"Браузер и страница инициализированы (headless: {self.is_headless}).")
 
-                    # Открываем первую ссылку после успешной инициализации
                     if not self.url_list:
                         self.logger.warning("Список ссылок пуст.")
-                        self.stop() # Сигнализируем о завершении, если нет ссылок
-                        break # Выходим из внешнего цикла
+                        self.stop()
+                        break
 
-                    # Начинаем с текущего индекса ссылки
+
                     initial_url = self.url_list[self.current_url_index]
-                    await self.page.goto(initial_url, timeout=60000) # Увеличим таймаут на всякий случай
+                    await self.page.goto(initial_url, timeout=60000)
+                    time.sleep(2)
                     self.logger.info(f"Открыта начальная ссылка в новой странице: {initial_url}")
 
-                # --- Внутренний цикл обновления ---
                 while not self._stop_event.is_set():
-                    # Переходим к следующей ссылке
                     self.current_url_index = (self.current_url_index + 1) % len(self.url_list)
                     next_url = self.url_list[self.current_url_index]
 
                     try:
-                        # Асинхронная задержка. wait() прерывается при _stop_event.
+
                         try:
                              await asyncio.wait_for(self._stop_event.wait(), timeout=random.randint(self.refresh_interval - 1, self.refresh_interval + 2))
-                             # Если wait_for не вызвал TimeoutError, значит _stop_event установлен
                              self.logger.info("Получен сигнал остановки во время ожидания, завершение внутреннего цикла.")
-                             break # Выходим из внутреннего цикла
+                             break
                         except asyncio.TimeoutError:
-                             # Это ожидаемое поведение, если сигнал остановки не был получен
                              pass
 
+                        try:
+                            ad_element = self.page.locator("text=Отключить рекламу")
+                            if await ad_element.count() > 0:
+                                PageWatcher.ads_watched += 1
+                                self.logger.info(f"Реклам просмотрено: {PageWatcher.ads_watched}" )
+                            PageWatcher.reloads_count += 1
+                        except:
+                            pass
 
-                        # Выполняем обновление
-                        await self.page.goto(next_url, timeout=60000) # Увеличим таймаут
+                        await self.page.goto(next_url, timeout=60000)
+
                         self.logger.info(f"Обновлено, перешли на ссылку: {next_url}")
 
                     except Error as e:
                         self.logger.error(f"Ошибка Playwright при обновлении на {next_url}: {e}")
-                        # При ошибке Playwright, закрываем текущую страницу/браузер и выходим из внутреннего цикла.
-                        break # Выходим из внутреннего цикла, чтобы сработал блок except/finally внешнего цикла
+                        break
                     except Exception as e:
-                        # Перехватываем любые другие непредвиденные ошибки во внутреннем цикле
                         self.logger.error(f"Непредвиденная ошибка во внутреннем цикле: {e}")
-                        break # Выходим из внутреннего цикла
+                        break
 
-                # Если вышли из внутреннего цикла (либо из-за break, либо _stop_event)
                 if self._stop_event.is_set():
                      self.logger.info("Внешний цикл: Обнаружен сигнал остановки.")
-                     break # Выходим и из внешнего цикла тоже
+                     break
 
-            # --- Перехват ошибок инициализации или ошибок из внутреннего цикла ---
             except Error as e:
                  self.logger.error(f"Ошибка Playwright при работе или инициализации: {e}")
-                 # Закрываем проблемные страницу и браузер, если они были созданы
                  await self._close_browser_and_page()
 
-                 # Задержка перед попыткой перезапуска
                  if not self._stop_event.is_set():
-                     restart_delay = random.randint(1, 5) # Уменьшим задержку до 5 секунд
+                     restart_delay = random.randint(1, 5)
                      self.logger.warning(f"Попытка перезапуска через {restart_delay} секунд...")
                      try:
                          await asyncio.wait_for(self._stop_event.wait(), timeout=restart_delay)
                          self.logger.info("Получен сигнал остановки во время задержки перезапуска.")
                          break
                      except asyncio.TimeoutError:
-                         pass # Продолжаем, если таймаут истек без получения сигнала
+                         pass
                  else:
                       self.logger.info("Сигнал остановки получен, перезапуск отменен.")
                       break
 
 
             except Exception as e:
-                # Ловим любые другие исключения
                 self.logger.error(f"Непредвиденная ошибка в основном цикле наблюдателя: {e}")
                 await self._close_browser_and_page()
 
@@ -171,7 +147,6 @@ class PageWatcher:
 
 
             finally:
-                # Этот блок выполняется при выходе из ВНЕШНЕГО цикла while (т.е. при окончательном завершении наблюдателя)
                 self.logger.info("Наблюдатель страницы завершает работу.")
                 await self._close_browser_and_page()
                 self.logger.info("Наблюдатель страницы завершен.")
@@ -260,30 +235,23 @@ async def watch_urls(urls, num_windows, refresh_interval, window_size, is_headle
 
 
         try:
-            # Основной асинхронный цикл просто ждет сигнала прерывания (Ctrl+C)
-            # или завершения всех задач наблюдателей.
             while True:
-                # Проверяем, завершились ли все наблюдатели
                 if all(watcher._stop_event.is_set() for watcher in watchers):
                     logging.info("Все наблюдатели завершили работу.")
                     break
-                await asyncio.sleep(1) # Небольшая задержка
+                await asyncio.sleep(1)
 
         except asyncio.CancelledError:
              logging.info("Получен сигнал отмены (например, из-за KeyboardInterrupt). Инициирую завершение наблюдателей.")
-             # При получении отмены, просим каждого наблюдателя остановиться
              for watcher in watchers:
                  watcher.stop()
-             # Ждем завершения всех задач наблюдателей
              logging.info("Ожидание завершения наблюдателей...")
-             # Создаем список задач из наблюдателей и ждем их завершения
              await asyncio.gather(*[watcher.run() for watcher in watchers if not watcher._stop_event.is_set()], return_exceptions=True)
 
 
         finally:
             # Убеждаемся, что все страницы и браузеры закрыты в конце
             logging.info("Закрытие оставшихся страниц и браузеров.")
-            # Итерируемся по копии списка active_pages
             async with pages_lock:
                 for page in list(active_pages):
                     try:
@@ -292,6 +260,7 @@ async def watch_urls(urls, num_windows, refresh_interval, window_size, is_headle
                              active_pages.remove(page)
                     except Exception as e:
                         logging.error(f"Ошибка при закрытии страницы в finally блоке watch_urls: {e}")
+            logging.info(f"ОТЧЕТ | Просмотры: {PageWatcher.reloads_count} | Просмотрено реклам на Rutube: {PageWatcher.ads_watched}")
 
             logging.info("Программа завершена.")
 
@@ -308,7 +277,7 @@ async def main():
     parser.add_argument(
         '-i', '--interval',
         type=int,
-        default=5, # Изменил по умолчанию на 5, как в вашем запросе
+        default=5,
         help='Интервал обновления страниц в секундах (по умолчанию: 5)'
     )
     parser.add_argument(
@@ -346,15 +315,11 @@ async def main():
     await watch_urls(urls, args.windows, args.interval, window_size, args.headless)
 
 if __name__ == "__main__":
-    # Для запуска асинхронной функции main
     try:
         asyncio.run(main())
     except KeyboardInterrupt:
         logging.info("Программа прервана пользователем (Ctrl+C).")
-        # asyncio.run сам обрабатывает KeyboardInterrupt, вызывая CancelledError
-        # в ожидающих корутинах, которые мы ловим в watch_urls.
-        # Дополнительная обработка здесь может не потребоваться,
-        # но можно добавить логирование.
+
     except Exception as e:
         logging.error(f"Непредвиденная ошибка в main: {e}")
         sys.exit(1)
