@@ -1,13 +1,9 @@
 import argparse
 import logging
-import time
+import asyncio
 import sys
-import threading
 import random
-from selenium import webdriver
-from selenium.webdriver.chrome.service import Service
-from selenium.webdriver.chrome.options import Options
-from selenium.common.exceptions import WebDriverException, SessionNotCreatedException
+from playwright.async_api import async_playwright, Playwright, Browser, Page, Error
 
 # Настройка логирования
 logging.basicConfig(
@@ -24,82 +20,105 @@ error_file_handler.setFormatter(logging.Formatter('%(asctime)s - %(name)s - %(le
 root_logger = logging.getLogger()
 root_logger.addHandler(error_file_handler)
 
-active_drivers = []
+# Список активных страниц (в Playwright мы работаем с страницами, а не с драйверами напрямую)
+active_pages = []
+# Используем asyncio.Lock для безопасного доступа к active_pages
+pages_lock = asyncio.Lock()
 
-class BrowserWatcher(threading.Thread):
+class PageWatcher:
     """
-    Поток, управляющий одним окном браузера и его циклом обновления.
-    Перезапускает браузер в случае ошибки.
+    Класс, управляющий одной страницей браузера Playwright и ее циклом обновления.
+    Перезапускает страницу/браузер в случае ошибки.
     """
-    def __init__(self, url_list, refresh_interval, window_size, is_headless, thread_id):
-        threading.Thread.__init__(self)
+    def __init__(self, playwright_instance: Playwright, url_list, refresh_interval, window_size, is_headless, thread_id):
+        self.playwright = playwright_instance
         self.url_list = url_list
         self.refresh_interval = refresh_interval
         self.window_size = window_size
         self.is_headless = is_headless
         self.thread_id = thread_id
-        self.driver = None # Драйвер инициализируется внутри run
-        self._stop_event = threading.Event()
+        self.browser: Browser = None
+        self.page: Page = None
+        self._stop_event = asyncio.Event() # Используем asyncio.Event для асинхронного прерывания
         self.current_url_index = 0
-        self.logger = logging.getLogger(f'Thread-{self.thread_id}')
-        # Устанавливаем начальный индекс для этого потока, если нужно
-        # (Логика установки начального индекса из watch_urls будет вызвана после __init__)
+        self.logger = logging.getLogger(f'Watcher-{self.thread_id}')
 
-
-    def run(self):
-        """Метод, выполняемый при запуске потока."""
-        self.logger.info("Поток стартовал.")
+    async def run(self):
+        """Асинхронный метод, выполняемый при запуске наблюдателя страницы."""
+        self.logger.info("Наблюдатель страницы стартовал.")
 
         # Внешний цикл для перезапуска браузера. Продолжается до получения сигнала остановки.
         while not self._stop_event.is_set():
             try:
-                # --- Инициализация драйвера и первая загрузка для этого цикла перезапуска ---
-                # Инициализируем драйвер только если он None (первый запуск или после ошибки)
-                if self.driver is None:
-                     self.logger.info("Попытка инициализации нового драйвера...")
-                     self.driver = setup_driver(self.window_size, self.is_headless)
-                     # with driver_list_lock:
-                     active_drivers.append(self.driver)
-                     self.logger.info(f"Драйвер инициализирован (headless: {self.is_headless}).")
+                # --- Инициализация браузера и страницы ---
+                if self.browser is None or self.page is None:
+                    self.logger.info("Попытка инициализации нового браузера и страницы...")
+                    self.browser = await self.playwright.chromium.launch(
+                        headless=self.is_headless,
+                        args=[
+                            "--no-sandbox",
+                            "--disable-dev-shm-usage",
+                            "--disable-gpu", # Важно для headless
+                            "--disable-extensions",
+                            "--disable-notifications",
+                            "--mute-audio",
+                            "--disable-blink-features=AutomationControlled", # Пытается скрыть navigator.webdriver
+                        ]
+                    )
+                    # Установка размера окна после запуска браузера
+                    context = await self.browser.new_context(viewport={'width': self.window_size[0], 'height': self.window_size[1]})
 
-                     self.driver.set_window_position(random.randint(20, 600), random.randint(20, 600))
+                    self.page = await context.new_page()
 
-                     # Открываем первую ссылку после успешной инициализации нового драйвера
-                     if not self.url_list:
-                         self.logger.warning("Список ссылок пуст.")
-                         self.stop() # Сигнализируем о завершении, если нет ссылок
-                         break # Выходим из внешнего цикла
+                    # Установка позиции окна (если не headless)
+                    # В Playwright нет прямого метода set_window_position,
+                    # эта функциональность обычно управляется на уровне операционной системы или фреймворка.
+                    # Для видимого режима, окна могут открываться в случайных местах по умолчанию или
+                    # требовать дополнительных инструментов. Пропускаем эту часть для Playwright.
+                    # if not self.is_headless:
+                    #     pass # Логика для установки позиции окна, если это возможно
 
-                     # Начинаем с текущего индекса ссылки (сохранен после предыдущей ошибки или установлен из watch_urls)
-                     initial_url = self.url_list[self.current_url_index]
-                     self.driver.get(initial_url)
-                     self.logger.info(f"Открыта начальная ссылка в новом драйвере: {initial_url}")
-                     # Успешно открыли первую ссылку, теперь переходим к циклу обновления
+                    async with pages_lock:
+                        active_pages.append(self.page)
 
+                    self.logger.info(f"Браузер и страница инициализированы (headless: {self.is_headless}).")
 
-                # --- Внутренний цикл обновления. Работает, пока драйвер жив и нет сигнала остановки ---
-                # Если мы сюда попали, значит драйвер успешно инициализирован и загрузил первую ссылку
+                    # Открываем первую ссылку после успешной инициализации
+                    if not self.url_list:
+                        self.logger.warning("Список ссылок пуст.")
+                        self.stop() # Сигнализируем о завершении, если нет ссылок
+                        break # Выходим из внешнего цикла
+
+                    # Начинаем с текущего индекса ссылки
+                    initial_url = self.url_list[self.current_url_index]
+                    await self.page.goto(initial_url, timeout=60000) # Увеличим таймаут на всякий случай
+                    self.logger.info(f"Открыта начальная ссылка в новой странице: {initial_url}")
+
+                # --- Внутренний цикл обновления ---
                 while not self._stop_event.is_set():
                     # Переходим к следующей ссылке
                     self.current_url_index = (self.current_url_index + 1) % len(self.url_list)
                     next_url = self.url_list[self.current_url_index]
 
                     try:
-                        # Задержка перед обновлением. wait() прерывается при stop_event.
-                        # Если wait() возвращает True, значит, _stop_event был установлен.
-                        if self._stop_event.wait(random.randint(self.refresh_interval - 2, self.refresh_interval + 3)):
-                            self.logger.info("Получен сигнал остановки во время ожидания, завершение внутреннего цикла.")
-                            break # Выходим из внутреннего цикла
+                        # Асинхронная задержка. wait() прерывается при _stop_event.
+                        try:
+                             await asyncio.wait_for(self._stop_event.wait(), timeout=random.randint(self.refresh_interval - 1, self.refresh_interval + 2))
+                             # Если wait_for не вызвал TimeoutError, значит _stop_event установлен
+                             self.logger.info("Получен сигнал остановки во время ожидания, завершение внутреннего цикла.")
+                             break # Выходим из внутреннего цикла
+                        except asyncio.TimeoutError:
+                             # Это ожидаемое поведение, если сигнал остановки не был получен
+                             pass
+
 
                         # Выполняем обновление
-                        self.driver.get(next_url)
+                        await self.page.goto(next_url, timeout=60000) # Увеличим таймаут
                         self.logger.info(f"Обновлено, перешли на ссылку: {next_url}")
 
-                    # Перехватываем ошибки Selenium (включая тайм-ауты) при операции get()
-                    except WebDriverException as e:
-                        self.logger.error(f"Ошибка Selenium при обновлении на {next_url}: {e}")
-                        # При ошибке Selenium, закрываем текущий драйвер и выходим из внутреннего цикла.
-                        # Внешний цикл поймает это и попытается перезапустить.
+                    except Error as e:
+                        self.logger.error(f"Ошибка Playwright при обновлении на {next_url}: {e}")
+                        # При ошибке Playwright, закрываем текущую страницу/браузер и выходим из внутреннего цикла.
                         break # Выходим из внутреннего цикла, чтобы сработал блок except/finally внешнего цикла
                     except Exception as e:
                         # Перехватываем любые другие непредвиденные ошибки во внутреннем цикле
@@ -111,95 +130,79 @@ class BrowserWatcher(threading.Thread):
                      self.logger.info("Внешний цикл: Обнаружен сигнал остановки.")
                      break # Выходим и из внешнего цикла тоже
 
-
             # --- Перехват ошибок инициализации или ошибок из внутреннего цикла ---
-            # Этот блок сработает, если в блоке try выше (при инициализации или во внутреннем цикле)
-            # возникло исключение (WebDriverException, SessionNotCreatedException, или любое другое,
-            # если оно не было поймано во внутреннем try-except).
-            except (WebDriverException, SessionNotCreatedException) as e:
-                 self.logger.error(f"Ошибка при работе или инициализации драйвера: {e}")
-                 # Закрываем проблемный драйвер, если он был создан
-                 if self.driver:
-                     try:
-                         self.driver.quit()
-                         self.logger.info("Закрыт проблемный драйвер после ошибки.")
-                         # with driver_list_lock:
-                         if self.driver in active_drivers:
-                             active_drivers.remove(self.driver)
-                     except Exception as quit_e:
-                          self.logger.error(f"Ошибка при закрытии проблемного драйвера: {quit_e}")
-                 self.driver = None # Сбрасываем ссылку на драйвер, чтобы в следующем витке внешнего цикла он был переинициализирован
+            except Error as e:
+                 self.logger.error(f"Ошибка Playwright при работе или инициализации: {e}")
+                 # Закрываем проблемные страницу и браузер, если они были созданы
+                 await self._close_browser_and_page()
 
-                 # Задержка перед попыткой перезапуска, если программа не завершается
+                 # Задержка перед попыткой перезапуска
                  if not self._stop_event.is_set():
-                     restart_delay = random.randint(1,10)
+                     restart_delay = random.randint(1, 5) # Уменьшим задержку до 5 секунд
                      self.logger.warning(f"Попытка перезапуска через {restart_delay} секунд...")
-                     # Ждем с возможностью прерывания
-                     if self._stop_event.wait(restart_delay):
+                     try:
+                         await asyncio.wait_for(self._stop_event.wait(), timeout=restart_delay)
                          self.logger.info("Получен сигнал остановки во время задержки перезапуска.")
-                         break # Выходим из внешнего цикла, если получили сигнал во время ожидания
+                         break
+                     except asyncio.TimeoutError:
+                         pass # Продолжаем, если таймаут истек без получения сигнала
                  else:
                       self.logger.info("Сигнал остановки получен, перезапуск отменен.")
-                      break # Выходим из внешнего цикла
+                      break
+
 
             except Exception as e:
-                # Ловим любые другие исключения, которые могли просочиться
-                self.logger.error(f"Непредвиденная ошибка в основном цикле потока: {e}")
-                # Аналогично, пытаемся закрыть драйвер при любой другой ошибке
-                if self.driver:
-                    try:
-                        self.driver.quit()
-                        self.logger.info("Закрыт драйвер из-за непредвиденной ошибки.")
-                        # with driver_list_lock:
-                        if self.driver in active_drivers:
-                            active_drivers.remove(self.driver)
-                    except Exception as quit_e:
-                         self.logger.error(f"Ошибка при закрытии драйвера после непредвиденной ошибки: {quit_e}")
-                self.driver = None # Сбрасываем драйвер
+                # Ловим любые другие исключения
+                self.logger.error(f"Непредвиденная ошибка в основном цикле наблюдателя: {e}")
+                await self._close_browser_and_page()
 
                 if not self._stop_event.is_set():
-                    restart_delay = random.randint(1,10)
+                    restart_delay = random.randint(1, 5)
                     self.logger.warning(f"Попытка перезапуска через {restart_delay} секунд...")
-                    if self._stop_event.wait(restart_delay):
+                    try:
+                        await asyncio.wait_for(self._stop_event.wait(), timeout=restart_delay)
                         self.logger.info("Получен сигнал остановки во время задержки перезапуска.")
                         break
+                    except asyncio.TimeoutError:
+                         pass
                 else:
                      self.logger.info("Сигнал остановки получен, перезапуск отменен.")
                      break
 
 
             finally:
-                # Этот блок выполняется при выходе из ВНЕШНЕГО цикла while (т.е. при окончательном завершении потока)
-                # Убедимся, что драйвер закрыт, если он еще открыт
-                self.logger.info("Поток завершает работу.")
-                if self.driver:
-                    try:
-                        self.driver.quit()
-                        self.logger.info("Драйвер закрыт при окончательном завершении потока.")
-                        # with driver_list_lock:
-                        if self.driver in active_drivers:
-                                active_drivers.remove(self.driver)
-                    except Exception as e:
-                        self.logger.error(f"Ошибка при закрытии драйвера в finally блоке потока: {e}")
-                    self.driver = None # Окончательно сбрасываем
+                # Этот блок выполняется при выходе из ВНЕШНЕГО цикла while (т.е. при окончательном завершении наблюдателя)
+                self.logger.info("Наблюдатель страницы завершает работу.")
+                await self._close_browser_and_page()
+                self.logger.info("Наблюдатель страницы завершен.")
 
-                self.logger.info("Поток завершен.")
+
+    async def _close_browser_and_page(self):
+        """Аккуратно закрывает страницу и браузер."""
+        if self.page:
+            try:
+                async with pages_lock:
+                    if self.page in active_pages:
+                        active_pages.remove(self.page)
+                await self.page.close()
+                self.logger.info("Страница закрыта.")
+            except Exception as e:
+                self.logger.error(f"Ошибка при закрытии страницы: {e}")
+            self.page = None
+
+        if self.browser:
+            try:
+                await self.browser.close()
+                self.logger.info("Браузер закрыт.")
+            except Exception as e:
+                self.logger.error(f"Ошибка при закрытии браузера: {e}")
+            self.browser = None
 
 
     def stop(self):
-        """Сигнализирует потоку о необходимости завершения."""
+        """Сигнализирует наблюдателю о необходимости завершения."""
         self.logger.info("Получен запрос на остановку.")
         self._stop_event.set()
-        # Можно добавить здесь driver.quit() с try/except,
-        # чтобы разблокировать блокирующие операции быстрее,
-        # но это может быть менее надежно, чем дождаться обработки в run().
-        # try:
-        #     if self.driver:
-        #         # Закрытие драйвера может вызвать исключения, если он уже в плохом состоянии
-        #         self.driver.quit()
-        #         self.logger.info("Попытка экстренного закрытия драйвера при остановке.")
-        # except Exception as e:
-        #     self.logger.warning(f"Ошибка при попытке экстренного закрытия драйвера при остановке: {e}")
 
 
 def read_urls_from_file(filepath):
@@ -219,98 +222,82 @@ def read_urls_from_file(filepath):
         sys.exit(1)
     return urls
 
-def setup_driver(window_size, is_headless):
-    """Настраивает и возвращает экземпляр ChromeDriver."""
-    options = Options()
-    if is_headless:
-        options.add_argument("--headless=new")
-    options.add_argument("--no-sandbox")
-    options.add_argument("--disable-dev-shm-usage")
-    options.add_argument(f"--window-size={window_size[0]},{window_size[1]}")
-    # Опции, добавленные вами:
-    options.add_argument('--disable-ad-blocking')
-    options.add_argument('--disable-extensions')
-    options.add_argument('--disable-notifications')
-    options.add_argument('--mute-audio')
-    options.add_argument('--disable-blink-features=AutomationControlled')
-
-    try:
-        service = Service()
-        driver = webdriver.Chrome(service=service, options=options)
-        return driver
-    except Exception as e:
-        # Здесь мы просто возбуждаем исключение, обработка в вызывающем коде (run метода BrowserWatcher)
-        raise e
-
-def watch_urls(urls, num_windows, refresh_interval, window_size, is_headless):
-    """Запускает просмотр URL в нескольких окнах с обновлением, используя потоки."""
+async def watch_urls(urls, num_windows, refresh_interval, window_size, is_headless):
+    """Запускает просмотр URL в нескольких окнах с обновлением, используя асинхронные задачи."""
     if not urls:
         logging.warning("Нет ссылок для просмотра.")
         return
 
-    if len(urls) == 0: # Проверяем, что список ссылок не пуст
+    if len(urls) == 0:
         logging.warning("Нет доступных ссылок для открытия окон.")
         return
 
-    threads = []
-    logging.info(f"Создание {num_windows} потоков для просмотра {len(urls)} ссылок.")
+    # Playwright запускается один раз для всего асинхронного контекста
+    async with async_playwright() as p:
+        watchers = []
+        logging.info(f"Создание {num_windows} наблюдателей для просмотра {len(urls)} ссылок.")
 
-    url_index = 0
-    for i in range(num_windows): # Итерируемся до запрошенного количества окон
-        thread = BrowserWatcher(urls, refresh_interval, window_size, is_headless, thread_id=i)
-        # Устанавливаем начальный индекс для этого потока
-        thread.current_url_index = url_index
-        threads.append(thread)
-        thread.start()
-        time.sleep(2)
+        url_index = 0
+        for i in range(num_windows):
+            watcher = PageWatcher(p, urls, refresh_interval, window_size, is_headless, thread_id=i)
+            watcher.current_url_index = url_index
+            watchers.append(watcher)
+            # Запускаем run() как асинхронную задачу
+            asyncio.create_task(watcher.run())
 
-        # Определяем начальный индекс для следующего потока
-        # Если окон больше, чем ссылок, индексы будут повторяться
-        url_index = (url_index + 1) % len(urls)
+            # Определяем начальный индекс для следующего наблюдателя
+            url_index = (url_index + 1) % len(urls)
 
-
-    logging.info("Все потоки запущены.")
-    if is_headless:
-        logging.info("Браузеры работают в headless режиме (без видимых окон).")
-    else:
-        logging.info("Браузеры работают в видимом режиме.")
+            # Небольшая задержка между запуском наблюдателей
+            await asyncio.sleep(0.5)
 
 
-    try:
-        # Основной поток просто ждет сигнала прерывания (Ctrl+C)
-        while True:
-            time.sleep(1) # Небольшая задержка, чтобы не загружать CPU
-
-    except KeyboardInterrupt:
-        logging.info("Получен сигнал прерывания (Ctrl+C). Инициирую завершение потоков.")
-        # При получении Ctrl+C, просим каждый поток остановиться
-        for thread in threads:
-            thread.stop()
-
-        # Ждем завершения всех потоков
-        logging.info("Ожидание завершения потоков...")
-        for thread in threads:
-             # Используем join() без таймаута, чтобы дождаться их аккуратного завершения
-             thread.join()
-
-    finally:
-        # Убеждаемся, что все драйверы закрыты в конце, даже если что-то пошло не так.
-        logging.info("Закрытие оставшихся драйверов.")
-        # Итерируемся по копии списка active_drivers, т.к. элементы могут удаляться внутри цикла
-        for driver in list(active_drivers):
-            try:
-                driver.quit()
-                # with driver_list_lock: # Если используется блокировка
-                if driver in active_drivers:
-                     active_drivers.remove(driver)
-            except Exception as e:
-                logging.error(f"Ошибка при закрытии драйвера в finally блоке watch_urls: {e}")
-
-        logging.info("Программа завершена.")
+        logging.info("Все наблюдатели запущены.")
+        if is_headless:
+            logging.info("Браузеры работают в headless режиме (без видимых окон).")
+        else:
+            logging.info("Браузеры работают в видимом режиме.")
 
 
-def main():
-    """Основная функция для парсинга аргументов и запуска просмотра."""
+        try:
+            # Основной асинхронный цикл просто ждет сигнала прерывания (Ctrl+C)
+            # или завершения всех задач наблюдателей.
+            while True:
+                # Проверяем, завершились ли все наблюдатели
+                if all(watcher._stop_event.is_set() for watcher in watchers):
+                    logging.info("Все наблюдатели завершили работу.")
+                    break
+                await asyncio.sleep(1) # Небольшая задержка
+
+        except asyncio.CancelledError:
+             logging.info("Получен сигнал отмены (например, из-за KeyboardInterrupt). Инициирую завершение наблюдателей.")
+             # При получении отмены, просим каждого наблюдателя остановиться
+             for watcher in watchers:
+                 watcher.stop()
+             # Ждем завершения всех задач наблюдателей
+             logging.info("Ожидание завершения наблюдателей...")
+             # Создаем список задач из наблюдателей и ждем их завершения
+             await asyncio.gather(*[watcher.run() for watcher in watchers if not watcher._stop_event.is_set()], return_exceptions=True)
+
+
+        finally:
+            # Убеждаемся, что все страницы и браузеры закрыты в конце
+            logging.info("Закрытие оставшихся страниц и браузеров.")
+            # Итерируемся по копии списка active_pages
+            async with pages_lock:
+                for page in list(active_pages):
+                    try:
+                        await page.close()
+                        if page in active_pages:
+                             active_pages.remove(page)
+                    except Exception as e:
+                        logging.error(f"Ошибка при закрытии страницы в finally блоке watch_urls: {e}")
+
+            logging.info("Программа завершена.")
+
+
+async def main():
+    """Основная асинхронная функция для парсинга аргументов и запуска просмотра."""
     parser = argparse.ArgumentParser(description='Программа для просмотра веб-страниц в нескольких окнах с обновлением.')
     parser.add_argument(
         '-w', '--windows',
@@ -321,8 +308,8 @@ def main():
     parser.add_argument(
         '-i', '--interval',
         type=int,
-        default=3,
-        help='Интервал обновления страниц в секундах (по умолчанию: 3)'
+        default=5, # Изменил по умолчанию на 5, как в вашем запросе
+        help='Интервал обновления страниц в секундах (по умолчанию: 5)'
     )
     parser.add_argument(
         '-s', '--size',
@@ -356,7 +343,18 @@ def main():
 
     logging.info(f"Параметры запуска: Windows={args.windows}, Interval={args.interval}, Size={args.size}, Headless={args.headless}")
 
-    watch_urls(urls, args.windows, args.interval, window_size, args.headless)
+    await watch_urls(urls, args.windows, args.interval, window_size, args.headless)
 
 if __name__ == "__main__":
-    main()
+    # Для запуска асинхронной функции main
+    try:
+        asyncio.run(main())
+    except KeyboardInterrupt:
+        logging.info("Программа прервана пользователем (Ctrl+C).")
+        # asyncio.run сам обрабатывает KeyboardInterrupt, вызывая CancelledError
+        # в ожидающих корутинах, которые мы ловим в watch_urls.
+        # Дополнительная обработка здесь может не потребоваться,
+        # но можно добавить логирование.
+    except Exception as e:
+        logging.error(f"Непредвиденная ошибка в main: {e}")
+        sys.exit(1)
