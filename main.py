@@ -24,7 +24,7 @@ active_pages = []
 pages_lock = asyncio.Lock()
 
 class PageWatcher:
-    ads_watched = 0
+    rutube_ads_watched = 0
     reloads_count = 0
     def __init__(self, playwright_instance: Playwright, url_list, refresh_interval, window_size, is_headless, thread_id):
         self.playwright = playwright_instance
@@ -89,8 +89,8 @@ class PageWatcher:
                         try:
                             ad_element = self.page.locator("text=Отключить рекламу")
                             if await ad_element.count() > 0:
-                                PageWatcher.ads_watched += 1
-                                self.logger.info(f"Реклам просмотрено: {PageWatcher.ads_watched}" )
+                                PageWatcher.rutube_ads_watched += 1
+                                self.logger.info(f"Rutube Реклам просмотрено: {PageWatcher.rutube_ads_watched}" )
                             PageWatcher.reloads_count += 1
                         except:
                             pass
@@ -260,7 +260,7 @@ async def watch_urls(urls, num_windows, refresh_interval, window_size, is_headle
                              active_pages.remove(page)
                     except Exception as e:
                         logging.error(f"Ошибка при закрытии страницы в finally блоке watch_urls: {e}")
-            logging.info(f"ОТЧЕТ | Просмотры: {PageWatcher.reloads_count} | Просмотрено реклам на Rutube: {PageWatcher.ads_watched}")
+            logging.info(f"ОТЧЕТ | Просмотры: {PageWatcher.reloads_count} | Просмотрено реклам на Rutube: {PageWatcher.rutube_ads_watched}")
 
             logging.info("Программа завершена.")
 
