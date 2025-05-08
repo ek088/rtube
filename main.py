@@ -1,12 +1,18 @@
+import os
 import argparse
 import logging
 import asyncio
 import sys
 import random
-import time
 from typing import Optional
-
+from dotenv import load_dotenv
 from playwright.async_api import async_playwright, Playwright, Browser, Page, Error
+from aiogram import Bot
+
+load_dotenv()
+
+TELEGRAM_BOT_TOKEN: str = os.getenv("TELEGRAM_BOT_TOKEN")
+TELEGRAM_BOT_CHAT_ID: str = os.getenv("TELEGRAM_BOT_CHAT_ID")
 
 logging.basicConfig(
     level=logging.INFO,
@@ -19,6 +25,8 @@ error_file_handler.setFormatter(logging.Formatter('%(asctime)s - %(name)s - %(le
 
 root_logger = logging.getLogger()
 root_logger.addHandler(error_file_handler)
+
+alerting_bot = Bot(TELEGRAM_BOT_TOKEN)
 
 active_pages = []
 pages_lock = asyncio.Lock()
@@ -70,7 +78,6 @@ class PageWatcher:
 
                     initial_url = self.url_list[self.current_url_index]
                     await self.page.goto(initial_url, timeout=60000)
-                    time.sleep(2)
                     self.logger.info(f"Открыта начальная ссылка в новой странице: {initial_url}")
 
                 while not self._stop_event.is_set():
@@ -87,6 +94,9 @@ class PageWatcher:
                              pass
 
                         try:
+                            if "showcaptcha" in self.page.url:
+                                await alerting_bot.send_message(chat_id=TELEGRAM_BOT_CHAT_ID, text="ПОЯВИЛАСЬ КАПЧА")
+                                # await asyncio.sleep(120)
                             ad_element = self.page.locator("text=Отключить рекламу")
                             if await ad_element.count() > 0:
                                 PageWatcher.rutube_ads_watched += 1
@@ -224,7 +234,7 @@ async def watch_urls(urls, num_windows, refresh_interval, window_size, is_headle
             url_index = (url_index + 1) % len(urls)
 
             # Небольшая задержка между запуском наблюдателей
-            await asyncio.sleep(0.5)
+            await asyncio.sleep(2)
 
 
         logging.info("Все наблюдатели запущены.")
