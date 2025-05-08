@@ -96,7 +96,7 @@ class PageWatcher:
                         try:
                             if "showcaptcha" in self.page.url:
                                 await alerting_bot.send_message(chat_id=TELEGRAM_BOT_CHAT_ID, text="ПОЯВИЛАСЬ КАПЧА")
-                                # await asyncio.sleep(120)
+                                await asyncio.sleep(120)
                             ad_element = self.page.locator("text=Отключить рекламу")
                             if await ad_element.count() > 0:
                                 PageWatcher.rutube_ads_watched += 1
