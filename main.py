@@ -70,7 +70,6 @@ class PageWatcher:
 
                     initial_url = self.url_list[self.current_url_index]
                     await self.page.goto(initial_url, timeout=60000)
-                    time.sleep(2)
                     self.logger.info(f"Открыта начальная ссылка в новой странице: {initial_url}")
 
                 while not self._stop_event.is_set():
@@ -224,7 +223,7 @@ async def watch_urls(urls, num_windows, refresh_interval, window_size, is_headle
             url_index = (url_index + 1) % len(urls)
 
             # Небольшая задержка между запуском наблюдателей
-            await asyncio.sleep(0.5)
+            await asyncio.sleep(2)
 
 
         logging.info("Все наблюдатели запущены.")
