@@ -1,3 +1,5 @@
+import asyncio
+import concurrent.futures
 from twocaptcha import TwoCaptcha
 import settings
 
@@ -24,8 +26,16 @@ class YandexCaptchaSolver:
                 for p, q in [s.split(',')]]
 
     @staticmethod
-    async def solve(image_path: str) -> list:
+    async def _solve(image_path: str) -> list:
+        "deprecated"
         result = YandexCaptchaSolver.solver.coordinates(file=image_path)
         return YandexCaptchaSolver.extract_coordinates(result)
+
+    @staticmethod
+    async def solve(image_path: str) -> list:
+        loop = asyncio.get_running_loop()
+        with concurrent.futures.ThreadPoolExecutor() as pool:
+            result = await loop.run_in_executor(pool, lambda: YandexCaptchaSolver.solver.coordinates(file=image_path))
+            return YandexCaptchaSolver.extract_coordinates(result)
 
 
