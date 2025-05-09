@@ -139,10 +139,12 @@ class PageWatcher:
                             PageWatcher.reloads_count += 1
                         except:
                             pass
-
                         await self.page.goto(next_url, wait_until=None)
 
                         self.logger.info(f"Обновлено, перешли на ссылку: {next_url}")
+
+                    except TimeoutError:
+                        self.logger.info(f"Яндекс пытается помешать соединению, продолжаем работу")
 
                     except Error as e:
                         self.logger.error(f"Ошибка Playwright при обновлении на {next_url}: {e}")
