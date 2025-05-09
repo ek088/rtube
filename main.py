@@ -116,22 +116,20 @@ class PageWatcher:
                     try:
 
                         try:
-                             await asyncio.wait_for(self._stop_event.wait(), timeout=random.randint(self.refresh_interval - 1, self.refresh_interval + 2))
-                             self.logger.info("Получен сигнал остановки во время ожидания, завершение внутреннего цикла.")
-                             break
-                        except asyncio.TimeoutError:
-                             pass
-
-                        try:
                             if "showcaptcha" in self.page.url:
                                 logging.info(f"{self.name}: Появилась капча")
                                 try:
                                     await self.solve_yandex_captcha()
                                 except Exception as e:
                                     logging.error(f"Ошибка при решении капчи: {e}")
-                                # await alerting_bot.send_message(chat_id=settings.TELEGRAM_BOT_CHAT_ID, text="ПОЯВИЛАСЬ КАПЧА")
-                                # await asyncio.sleep(120)
 
+                            await asyncio.wait_for(self._stop_event.wait(), timeout=random.randint(self.refresh_interval - 1, self.refresh_interval + 2))
+                            self.logger.info("Получен сигнал остановки во время ожидания, завершение внутреннего цикла.")
+                            break
+                        except asyncio.TimeoutError:
+                             pass
+
+                        try:
                             ad_element = self.page.locator("text=Отключить рекламу")
                             if await ad_element.count() > 0:
                                 PageWatcher.rutube_ads_watched += 1
@@ -147,8 +145,9 @@ class PageWatcher:
                         self.logger.info(f"Яндекс пытается помешать соединению, продолжаем работу")
 
                     except Error as e:
-                        self.logger.error(f"Ошибка Playwright при обновлении на {next_url}: {e}")
-                        break
+                        # self.logger.error(f"Ошибка Playwright при обновлении на {next_url}: {e}")
+                        self.logger.info(f"Яндекс пытается помешать соединению, продолжаем работу")
+                        # break
                     except Exception as e:
                         self.logger.error(f"Непредвиденная ошибка во внутреннем цикле: {e}")
                         break
