@@ -1,13 +1,14 @@
-
 import argparse
 import logging
 import asyncio
 import sys
 import random
+import settings
 from typing import Optional
 from playwright.async_api import async_playwright, Playwright, Browser, Page, Error
 from aiogram import Bot
-import settings
+from services.captcha_service import YandexCaptchaEnums, YandexCaptchaSolver
+
 
 
 
@@ -31,7 +32,8 @@ pages_lock = asyncio.Lock()
 class PageWatcher:
     rutube_ads_watched = 0
     reloads_count = 0
-    def __init__(self, playwright_instance: Playwright, url_list, refresh_interval, window_size, is_headless, thread_id):
+    def __init__(self, playwright_instance: Playwright, url_list, refresh_interval, window_size, is_headless, thread_id, name):
+        self.name = name
         self.playwright = playwright_instance
         self.url_list = url_list
         self.refresh_interval = refresh_interval
@@ -43,6 +45,36 @@ class PageWatcher:
         self._stop_event = asyncio.Event()
         self.current_url_index = 0
         self.logger = logging.getLogger(f'Watcher-{self.thread_id}')
+
+    async def solve_yandex_captcha(self):
+        if random.randint(1,3) != 2:
+            self.logger.info(f'{self.name}: Пробую скипнуть без прохождения капчи')
+            return
+
+        captcha_button = self.page.locator(YandexCaptchaEnums.IM_NOT_ROBOT_BUTTON)
+        await captcha_button.wait_for(timeout=20000)
+        await captcha_button.click()
+
+        await self.page.wait_for_selector(YandexCaptchaEnums.CAPTCHA_IMAGE_SELECTOR, state='visible')
+        await self.page.wait_for_selector(YandexCaptchaEnums.CAPTCHA_ONLY_IMAGE, state='visible')
+
+        captcha_image = self.page.locator(YandexCaptchaEnums.CAPTCHA_IMAGE_SELECTOR)
+        await captcha_image.wait_for(timeout=20000)
+        await asyncio.sleep(5)
+
+        await captcha_image.screenshot(path=f'screenshots/{self.name}.png')
+        self.logger.info(f"{self.name}: Капча отправлена на решение")
+        coordinates = await YandexCaptchaSolver.solve(image_path=f'screenshots/{self.name}.png')
+
+        for point in coordinates:
+            await captcha_image.click(position=point)
+            await asyncio.sleep(1)
+
+        solve_button = self.page.locator(YandexCaptchaEnums.SOLVED_BUTTON_SELECTOR)
+        await solve_button.click()
+        self.logger.info(f"{self.name}: Капча решена")
+
+        await asyncio.sleep(2)
 
     async def run(self):
         """Асинхронный метод, выполняемый при запуске наблюдателя страницы."""
@@ -92,8 +124,14 @@ class PageWatcher:
 
                         try:
                             if "showcaptcha" in self.page.url:
-                                await alerting_bot.send_message(chat_id=settings.TELEGRAM_BOT_CHAT_ID, text="ПОЯВИЛАСЬ КАПЧА")
-                                await asyncio.sleep(120)
+                                logging.info(f"{self.name}: Появилась капча")
+                                try:
+                                    await self.solve_yandex_captcha()
+                                except Exception as e:
+                                    logging.error(f"Ошибка при решении капчи: {e}")
+                                # await alerting_bot.send_message(chat_id=settings.TELEGRAM_BOT_CHAT_ID, text="ПОЯВИЛАСЬ КАПЧА")
+                                # await asyncio.sleep(120)
+
                             ad_element = self.page.locator("text=Отключить рекламу")
                             if await ad_element.count() > 0:
                                 PageWatcher.rutube_ads_watched += 1
@@ -221,7 +259,7 @@ async def watch_urls(urls, num_windows, refresh_interval, window_size, is_headle
 
         url_index = 0
         for i in range(num_windows):
-            watcher = PageWatcher(p, urls, refresh_interval, window_size, is_headless, thread_id=i)
+            watcher = PageWatcher(p, urls, refresh_interval, window_size, is_headless, thread_id=i, name=f"process_{i}")
             watcher.current_url_index = url_index
             watchers.append(watcher)
             # Запускаем run() как асинхронную задачу
