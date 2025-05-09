@@ -8,8 +8,7 @@ from typing import Optional
 from playwright.async_api import async_playwright, Playwright, Browser, Page, Error
 from aiogram import Bot
 from services.captcha_service import YandexCaptchaEnums, YandexCaptchaSolver
-
-
+from datetime import datetime
 
 
 logging.basicConfig(
@@ -32,6 +31,7 @@ pages_lock = asyncio.Lock()
 class PageWatcher:
     rutube_ads_watched = 0
     reloads_count = 0
+    captchas_solved = 0
     def __init__(self, playwright_instance: Playwright, url_list, refresh_interval, window_size, is_headless, thread_id, name):
         self.name = name
         self.playwright = playwright_instance
@@ -65,6 +65,9 @@ class PageWatcher:
         await captcha_image.screenshot(path=f'screenshots/{self.name}.png')
         self.logger.info(f"{self.name}: Капча отправлена на решение")
         coordinates = await YandexCaptchaSolver.solve(image_path=f'screenshots/{self.name}.png')
+        if len(coordinates) < 2:
+            self.logger.info(f"{self.name}: Некорректное решение капчи, пробуем еще раз")
+            return
 
         for point in coordinates:
             await captcha_image.click(position=point)
@@ -73,18 +76,19 @@ class PageWatcher:
         solve_button = self.page.locator(YandexCaptchaEnums.SOLVED_BUTTON_SELECTOR)
         await solve_button.click()
         self.logger.info(f"{self.name}: Капча решена")
+        PageWatcher.captchas_solved += 1
 
         await asyncio.sleep(2)
 
     async def run(self):
         """Асинхронный метод, выполняемый при запуске наблюдателя страницы."""
-        self.logger.info("Наблюдатель страницы стартовал.")
+        self.logger.info(f"{self.name}: Наблюдатель страницы стартовал.")
 
         while not self._stop_event.is_set():
             try:
 
                 if self.browser is None or self.page is None:
-                    self.logger.info("Попытка инициализации нового браузера и страницы...")
+                    self.logger.info(f"{self.name}: Попытка инициализации нового браузера и страницы...")
                     self.browser = await self.playwright.chromium.launch(
                         channel="chrome",
                         headless=self.is_headless,
@@ -97,7 +101,7 @@ class PageWatcher:
                     async with pages_lock:
                         active_pages.append(self.page)
 
-                    self.logger.info(f"Браузер и страница инициализированы (headless: {self.is_headless}).")
+                    self.logger.info(f"{self.name}: Браузер и страница инициализированы (headless: {self.is_headless}).")
 
                     if not self.url_list:
                         self.logger.warning("Список ссылок пуст.")
@@ -107,7 +111,7 @@ class PageWatcher:
 
                     initial_url = self.url_list[self.current_url_index]
                     await self.page.goto(initial_url, timeout=120000, wait_until="domcontentloaded")
-                    self.logger.info(f"Открыта начальная ссылка в новой странице: {initial_url}")
+                    self.logger.info(f"{self.name}: Открыта начальная ссылка в новой странице: {initial_url}")
 
                 while not self._stop_event.is_set():
                     self.current_url_index = (self.current_url_index + 1) % len(self.url_list)
@@ -121,10 +125,10 @@ class PageWatcher:
                                 try:
                                     await self.solve_yandex_captcha()
                                 except Exception as e:
-                                    logging.error(f"Ошибка при решении капчи: {e}")
+                                    logging.error(f"{self.name}: Ошибка при решении капчи: {e}")
 
                             await asyncio.wait_for(self._stop_event.wait(), timeout=random.randint(self.refresh_interval - 1, self.refresh_interval + 2))
-                            self.logger.info("Получен сигнал остановки во время ожидания, завершение внутреннего цикла.")
+                            self.logger.info(f"{self.name}: Получен сигнал остановки во время ожидания, завершение внутреннего цикла.")
                             break
                         except asyncio.TimeoutError:
                              pass
@@ -133,66 +137,66 @@ class PageWatcher:
                             ad_element = self.page.locator("text=Отключить рекламу")
                             if await ad_element.count() > 0:
                                 PageWatcher.rutube_ads_watched += 1
-                                self.logger.info(f"Rutube Реклам просмотрено: {PageWatcher.rutube_ads_watched}" )
+                                self.logger.info(f"{self.name}: Rutube Реклам просмотрено: {PageWatcher.rutube_ads_watched}" )
                             PageWatcher.reloads_count += 1
                         except:
                             pass
                         await self.page.goto(next_url, wait_until="domcontentloaded", timeout=30000)
 
-                        self.logger.info(f"Обновлено, перешли на ссылку: {next_url}")
+                        self.logger.info(f"{self.name}: Обновлено, перешли на ссылку: {next_url}")
 
                     except Error as e:
-                        self.logger.error(f"Ошибка Playwright при обновлении на {next_url}: {e}")
+                        self.logger.error(f"{self.name}: Ошибка Playwright при обновлении на {next_url}: {e}")
                         break
 
                     except Exception as e:
-                        self.logger.error(f"Непредвиденная ошибка во внутреннем цикле: {e}")
+                        self.logger.error(f"{self.name}: Непредвиденная ошибка во внутреннем цикле: {e}")
                         break
 
                 if self._stop_event.is_set():
-                     self.logger.info("Внешний цикл: Обнаружен сигнал остановки.")
+                     self.logger.info(f"{self.name}: Внешний цикл: Обнаружен сигнал остановки.")
                      break
 
             except Error as e:
-                 self.logger.error(f"Ошибка Playwright при работе или инициализации: {e}")
+                 self.logger.error(f"{self.name}: Ошибка Playwright при работе или инициализации: {e}")
                  await self._close_browser_and_page()
 
                  if not self._stop_event.is_set():
                      restart_delay = random.randint(1, 5)
-                     self.logger.warning(f"Попытка перезапуска через {restart_delay} секунд...")
+                     self.logger.warning(f"{self.name}: Попытка перезапуска через {restart_delay} секунд...")
                      try:
                          await asyncio.wait_for(self._stop_event.wait(), timeout=restart_delay)
-                         self.logger.info("Получен сигнал остановки во время задержки перезапуска.")
+                         self.logger.info(f"{self.name}: Получен сигнал остановки во время задержки перезапуска.")
                          break
                      except asyncio.TimeoutError:
                          pass
                  else:
-                      self.logger.info("Сигнал остановки получен, перезапуск отменен.")
+                      self.logger.info(f"{self.name}: Сигнал остановки получен, перезапуск отменен.")
                       break
 
 
             except Exception as e:
-                self.logger.error(f"Непредвиденная ошибка в основном цикле наблюдателя: {e}")
+                self.logger.error(f"{self.name}: Непредвиденная ошибка в основном цикле наблюдателя: {e}")
                 await self._close_browser_and_page()
 
                 if not self._stop_event.is_set():
                     restart_delay = random.randint(1, 5)
-                    self.logger.warning(f"Попытка перезапуска через {restart_delay} секунд...")
+                    self.logger.warning(f"{self.name}: Попытка перезапуска через {restart_delay} секунд...")
                     try:
                         await asyncio.wait_for(self._stop_event.wait(), timeout=restart_delay)
-                        self.logger.info("Получен сигнал остановки во время задержки перезапуска.")
+                        self.logger.info(f"{self.name}: Получен сигнал остановки во время задержки перезапуска.")
                         break
                     except asyncio.TimeoutError:
                          pass
                 else:
-                     self.logger.info("Сигнал остановки получен, перезапуск отменен.")
+                     self.logger.info(f"{self.name}: Сигнал остановки получен, перезапуск отменен.")
                      break
 
 
             finally:
-                self.logger.info("Наблюдатель страницы завершает работу.")
+                self.logger.info(f"{self.name}: Наблюдатель страницы завершает работу.")
                 await self._close_browser_and_page()
-                self.logger.info("Наблюдатель страницы завершен.")
+                self.logger.info(f"{self.name}: Наблюдатель страницы завершен.")
 
 
     async def _close_browser_and_page(self):
@@ -250,6 +254,8 @@ async def watch_urls(urls, num_windows, refresh_interval, window_size, is_headle
         logging.warning("Нет доступных ссылок для открытия окон.")
         return
 
+    start_time = datetime.now()
+
     # Playwright запускается один раз для всего асинхронного контекста
     async with async_playwright() as p:
         watchers = []
@@ -303,7 +309,8 @@ async def watch_urls(urls, num_windows, refresh_interval, window_size, is_headle
                              active_pages.remove(page)
                     except Exception as e:
                         logging.error(f"Ошибка при закрытии страницы в finally блоке watch_urls: {e}")
-            logging.info(f"ОТЧЕТ | Просмотры: {PageWatcher.reloads_count} | Просмотрено реклам на Rutube: {PageWatcher.rutube_ads_watched}")
+            worktime = datetime.now() - start_time
+            logging.info(f"ОТЧЕТ | Время работы: {worktime} | Просмотры: {PageWatcher.reloads_count} | Решено капч: {PageWatcher.captchas_solved} | Просмотрено реклам на Rutube: {PageWatcher.rutube_ads_watched}")
 
             logging.info("Программа завершена.")
 
