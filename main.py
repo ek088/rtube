@@ -1,18 +1,15 @@
-import os
+
 import argparse
 import logging
 import asyncio
 import sys
 import random
 from typing import Optional
-from dotenv import load_dotenv
 from playwright.async_api import async_playwright, Playwright, Browser, Page, Error
 from aiogram import Bot
+import settings
 
-load_dotenv()
 
-TELEGRAM_BOT_TOKEN: str = os.getenv("TELEGRAM_BOT_TOKEN")
-TELEGRAM_BOT_CHAT_ID: str = os.getenv("TELEGRAM_BOT_CHAT_ID")
 
 logging.basicConfig(
     level=logging.INFO,
@@ -26,7 +23,7 @@ error_file_handler.setFormatter(logging.Formatter('%(asctime)s - %(name)s - %(le
 root_logger = logging.getLogger()
 root_logger.addHandler(error_file_handler)
 
-alerting_bot = Bot(TELEGRAM_BOT_TOKEN)
+alerting_bot = Bot(settings.TELEGRAM_BOT_TOKEN)
 
 active_pages = []
 pages_lock = asyncio.Lock()
@@ -95,7 +92,7 @@ class PageWatcher:
 
                         try:
                             if "showcaptcha" in self.page.url:
-                                await alerting_bot.send_message(chat_id=TELEGRAM_BOT_CHAT_ID, text="ПОЯВИЛАСЬ КАПЧА")
+                                await alerting_bot.send_message(chat_id=settings.TELEGRAM_BOT_CHAT_ID, text="ПОЯВИЛАСЬ КАПЧА")
                                 await asyncio.sleep(120)
                             ad_element = self.page.locator("text=Отключить рекламу")
                             if await ad_element.count() > 0:
