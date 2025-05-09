@@ -139,7 +139,7 @@ class PageWatcher:
                             PageWatcher.reloads_count += 1
                         except:
                             pass
-                        await self.page.goto(next_url, wait_until=None)
+                        await self.page.goto(next_url, wait_until=None, timeout=self.refresh_interval*1000)
 
                         self.logger.info(f"Обновлено, перешли на ссылку: {next_url}")
 
