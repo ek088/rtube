@@ -106,7 +106,7 @@ class PageWatcher:
 
 
                     initial_url = self.url_list[self.current_url_index]
-                    await self.page.goto(initial_url, timeout=60000)
+                    await self.page.goto(initial_url, timeout=120000, wait_until="domcontentloaded")
                     self.logger.info(f"Открыта начальная ссылка в новой странице: {initial_url}")
 
                 while not self._stop_event.is_set():
@@ -137,17 +137,14 @@ class PageWatcher:
                             PageWatcher.reloads_count += 1
                         except:
                             pass
-                        await self.page.goto(next_url, wait_until=None, timeout=self.refresh_interval*1000)
+                        await self.page.goto(next_url, wait_until="domcontentloaded", timeout=30000)
 
                         self.logger.info(f"Обновлено, перешли на ссылку: {next_url}")
 
-                    except TimeoutError:
-                        self.logger.info(f"Яндекс пытается помешать соединению, продолжаем работу")
-
                     except Error as e:
-                        # self.logger.error(f"Ошибка Playwright при обновлении на {next_url}: {e}")
-                        self.logger.info(f"Яндекс пытается помешать соединению, продолжаем работу")
-                        # break
+                        self.logger.error(f"Ошибка Playwright при обновлении на {next_url}: {e}")
+                        break
+
                     except Exception as e:
                         self.logger.error(f"Непредвиденная ошибка во внутреннем цикле: {e}")
                         break
