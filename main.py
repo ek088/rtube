@@ -140,7 +140,7 @@ class PageWatcher:
                         except:
                             pass
 
-                        await self.page.goto(next_url, timeout=60000)
+                        await self.page.goto(next_url, wait_until=None)
 
                         self.logger.info(f"Обновлено, перешли на ссылку: {next_url}")
 
