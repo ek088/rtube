@@ -310,7 +310,12 @@ async def watch_urls(urls, num_windows, refresh_interval, window_size, is_headle
                     except Exception as e:
                         logging.error(f"Ошибка при закрытии страницы в finally блоке watch_urls: {e}")
             worktime = datetime.now() - start_time
-            logging.info(f"ОТЧЕТ | Время работы: {worktime} | Просмотры: {PageWatcher.reloads_count} | Решено капч: {PageWatcher.captchas_solved} | Просмотрено реклам на Rutube: {PageWatcher.rutube_ads_watched}")
+
+            report = f"ОТЧЕТ | Время работы: {worktime} | Просмотры: {PageWatcher.reloads_count} | Решено капч: {PageWatcher.captchas_solved} | Просмотрено реклам на Rutube: {PageWatcher.rutube_ads_watched}"
+            logging.info(report)
+
+            with open('reports.txt', 'a', encoding='utf-8') as f:
+                f.write(report + '\n')
 
             logging.info("Программа завершена.")
 
