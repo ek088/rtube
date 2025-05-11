@@ -90,9 +90,11 @@ class PageWatcher:
                 if self.browser is None or self.page is None:
                     self.logger.info(f"{self.name}: Попытка инициализации нового браузера и страницы...")
                     self.browser = await self.playwright.chromium.launch(
+                        proxy={"server": "http://31.44.188.8:9018", "username": "JMuV3u", "password": "pRTq1S"},
                         channel="chrome",
                         headless=self.is_headless,
                     )
+
 
                     context = await self.browser.new_context(viewport={'width': self.window_size[0], 'height': self.window_size[1]})
 
@@ -110,7 +112,7 @@ class PageWatcher:
 
 
                     initial_url = self.url_list[self.current_url_index]
-                    await self.page.goto(initial_url, timeout=120000, wait_until="domcontentloaded")
+                    await self.page.goto(initial_url, timeout=120000)
                     self.logger.info(f"{self.name}: Открыта начальная ссылка в новой странице: {initial_url}")
 
                 while not self._stop_event.is_set():
