@@ -5,7 +5,7 @@ import sys
 import random
 import settings
 from typing import Optional
-from playwright.async_api import async_playwright, Playwright, Browser, Page, Error
+from playwright.async_api import async_playwright, Playwright, Browser, Page, Error, Request
 from aiogram import Bot
 from services.captcha_service import YandexCaptchaEnums, YandexCaptchaSolver
 from datetime import datetime
@@ -30,6 +30,7 @@ pages_lock = asyncio.Lock()
 
 class PageWatcher:
     rutube_ads_watched = 0
+    yandex_ads_watched = 0
     reloads_count = 0
     captchas_solved = 0
     def __init__(self, playwright_instance: Playwright, url_list, refresh_interval, window_size, is_headless, thread_id, name):
@@ -45,6 +46,24 @@ class PageWatcher:
         self._stop_event = asyncio.Event()
         self.current_url_index = 0
         self.logger = logging.getLogger(f'Watcher-{self.thread_id}')
+        self.ad_message_displayed = False
+
+    async def watch_for_webm_requests(self):
+        """
+        Отслеживает сетевые запросы на странице и выводит информацию
+        при обнаружении запроса на файл с расширением .webm (один раз).
+        """
+
+        async def handle_request(request: Request):
+            """Обработчик для каждого сетевого запроса."""
+
+            if ".webm" in request.url:
+                if not self.ad_message_displayed:
+                    PageWatcher.rutube_ads_watched += 1
+                    self.logger.info(f"{self.name}: Просмотрена Яндекс реклама. Реклам просмотрено: {PageWatcher.rutube_ads_watched}")
+                    self.ad_message_displayed = True
+
+        self.page.on("request", handle_request)
 
     async def solve_yandex_captcha(self):
         if random.randint(1,3) != 2:
@@ -127,7 +146,7 @@ class PageWatcher:
                                 except Exception as e:
                                     logging.error(f"{self.name}: Ошибка при решении капчи: {e}")
 
-                            await asyncio.wait_for(self._stop_event.wait(), timeout=random.randint(self.refresh_interval - 1, self.refresh_interval + 2))
+                            await asyncio.wait_for(self._stop_event.wait(), timeout=random.randint(self.refresh_interval - 2, self.refresh_interval + 4))
                             self.logger.info(f"{self.name}: Получен сигнал остановки во время ожидания, завершение внутреннего цикла.")
                             break
                         except asyncio.TimeoutError:
@@ -141,7 +160,10 @@ class PageWatcher:
                             PageWatcher.reloads_count += 1
                         except:
                             pass
-                        await self.page.goto(next_url, wait_until="domcontentloaded", timeout=30000)
+
+                        await self.watch_for_webm_requests()
+                        self.ad_message_displayed = False
+                        await self.page.goto(next_url, wait_until="load", timeout=30000)
 
                         self.logger.info(f"{self.name}: Обновлено, перешли на ссылку: {next_url}")
 
@@ -311,7 +333,7 @@ async def watch_urls(urls, num_windows, refresh_interval, window_size, is_headle
                         logging.error(f"Ошибка при закрытии страницы в finally блоке watch_urls: {e}")
             worktime = datetime.now() - start_time
 
-            report = f"ОТЧЕТ | Время работы: {worktime} | Просмотры: {PageWatcher.reloads_count} | Решено капч: {PageWatcher.captchas_solved} | Просмотрено реклам на Rutube: {PageWatcher.rutube_ads_watched}"
+            report = f"ОТЧЕТ | Время работы: {worktime} | Просмотры: {PageWatcher.reloads_count} | Решено капч: {PageWatcher.captchas_solved} | Рекламы Rutube: {PageWatcher.rutube_ads_watched} | Яндекс рекламы: {PageWatcher.yandex_ads_watched}"
             logging.info(report)
 
             with open('reports.txt', 'a', encoding='utf-8') as f:
