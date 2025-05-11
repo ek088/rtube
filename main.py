@@ -9,7 +9,7 @@ from playwright.async_api import async_playwright, Playwright, Browser, Page, Er
 from aiogram import Bot
 from services.captcha_service import YandexCaptchaEnums, YandexCaptchaSolver
 from datetime import datetime
-
+import signal
 
 logging.basicConfig(
     level=logging.INFO,
@@ -49,14 +49,7 @@ class PageWatcher:
         self.ad_message_displayed = False
 
     async def watch_for_webm_requests(self):
-        """
-        Отслеживает сетевые запросы на странице и выводит информацию
-        при обнаружении запроса на файл с расширением .webm (один раз).
-        """
-
         async def handle_request(request: Request):
-            """Обработчик для каждого сетевого запроса."""
-
             if ".webm" in request.url:
                 if not self.ad_message_displayed:
                     PageWatcher.yandex_ads_watched += 1
@@ -100,7 +93,6 @@ class PageWatcher:
         await asyncio.sleep(2)
 
     async def run(self):
-        """Асинхронный метод, выполняемый при запуске наблюдателя страницы."""
         self.logger.info(f"{self.name}: Наблюдатель страницы стартовал.")
 
         while not self._stop_event.is_set():
@@ -222,7 +214,6 @@ class PageWatcher:
 
 
     async def _close_browser_and_page(self):
-        """Аккуратно закрывает страницу и браузер."""
         if self.page:
             try:
                 async with pages_lock:
@@ -244,13 +235,11 @@ class PageWatcher:
 
 
     def stop(self):
-        """Сигнализирует наблюдателю о необходимости завершения."""
         self.logger.info("Получен запрос на остановку.")
         self._stop_event.set()
 
 
 def read_urls_from_file(filepath):
-    """Читает список URL из файла."""
     urls = []
     try:
         with open(filepath, 'r', encoding='utf-8') as f:
@@ -267,7 +256,6 @@ def read_urls_from_file(filepath):
     return urls
 
 async def watch_urls(urls, num_windows, refresh_interval, window_size, is_headless):
-    """Запускает просмотр URL в нескольких окнах с обновлением, используя асинхронные задачи."""
     if not urls:
         logging.warning("Нет ссылок для просмотра.")
         return
@@ -277,8 +265,15 @@ async def watch_urls(urls, num_windows, refresh_interval, window_size, is_headle
         return
 
     start_time = datetime.now()
+    stop_event = asyncio.Event()
 
-    # Playwright запускается один раз для всего асинхронного контекста
+    def signal_handler(sig, frame):
+        logging.info(f"Получен сигнал {sig}. Инициирую завершение.")
+        stop_event.set()
+
+    signal.signal(signal.SIGINT, signal_handler)
+    signal.signal(signal.SIGTERM, signal_handler)
+
     async with async_playwright() as p:
         watchers = []
         logging.info(f"Создание {num_windows} наблюдателей для просмотра {len(urls)} ссылок.")
@@ -288,13 +283,10 @@ async def watch_urls(urls, num_windows, refresh_interval, window_size, is_headle
             watcher = PageWatcher(p, urls, refresh_interval, window_size, is_headless, thread_id=i, name=f"process_{i}")
             watcher.current_url_index = url_index
             watchers.append(watcher)
-            # Запускаем run() как асинхронную задачу
             asyncio.create_task(watcher.run())
 
-            # Определяем начальный индекс для следующего наблюдателя
             url_index = (url_index + 1) % len(urls)
 
-            # Небольшая задержка между запуском наблюдателей
             await asyncio.sleep(2)
 
 
@@ -306,22 +298,16 @@ async def watch_urls(urls, num_windows, refresh_interval, window_size, is_headle
 
 
         try:
-            while True:
-                if all(watcher._stop_event.is_set() for watcher in watchers):
-                    logging.info("Все наблюдатели завершили работу.")
-                    break
-                await asyncio.sleep(1)
-
-        except asyncio.CancelledError:
-             logging.info("Получен сигнал отмены (например, из-за KeyboardInterrupt). Инициирую завершение наблюдателей.")
-             for watcher in watchers:
-                 watcher.stop()
-             logging.info("Ожидание завершения наблюдателей...")
-             await asyncio.gather(*[watcher.run() for watcher in watchers if not watcher._stop_event.is_set()], return_exceptions=True)
-
+            await stop_event.wait()
 
         finally:
-            # Убеждаемся, что все страницы и браузеры закрыты в конце
+            logging.info("Инициирую остановку всех наблюдателей.")
+            for watcher in watchers:
+                watcher.stop()
+
+            logging.info("Ожидание завершения наблюдателей...")
+            await asyncio.gather(*[watcher.run() for watcher in watchers if not watcher._stop_event.is_set()], return_exceptions=True)
+
             logging.info("Закрытие оставшихся страниц и браузеров.")
             async with pages_lock:
                 for page in list(active_pages):
@@ -333,7 +319,7 @@ async def watch_urls(urls, num_windows, refresh_interval, window_size, is_headle
                         logging.error(f"Ошибка при закрытии страницы в finally блоке watch_urls: {e}")
             worktime = datetime.now() - start_time
 
-            report = f"ОТЧЕТ | Время работы: {worktime} | Просмотры: {PageWatcher.reloads_count} | Решено капч: {PageWatcher.captchas_solved} | Рекламы Rutube: {PageWatcher.rutube_ads_watched} | Яндекс рекламы: {PageWatcher.yandex_ads_watched}"
+            report = f"[{datetime.now()}]ОТЧЕТ | Время работы: {worktime} | Просмотры: {PageWatcher.reloads_count} | Решено капч: {PageWatcher.captchas_solved} | Рекламы Rutube: {PageWatcher.rutube_ads_watched} | Яндекс рекламы: {PageWatcher.yandex_ads_watched}"
             logging.info(report)
 
             with open('reports.txt', 'a', encoding='utf-8') as f:
@@ -343,7 +329,6 @@ async def watch_urls(urls, num_windows, refresh_interval, window_size, is_headle
 
 
 async def main():
-    """Основная асинхронная функция для парсинга аргументов и запуска просмотра."""
     parser = argparse.ArgumentParser(description='Программа для просмотра веб-страниц в нескольких окнах с обновлением.')
     parser.add_argument(
         '-w', '--windows',
@@ -394,9 +379,6 @@ async def main():
 if __name__ == "__main__":
     try:
         asyncio.run(main())
-    except KeyboardInterrupt:
-        logging.info("Программа прервана пользователем (Ctrl+C).")
-
     except Exception as e:
         logging.error(f"Непредвиденная ошибка в main: {e}")
         sys.exit(1)
