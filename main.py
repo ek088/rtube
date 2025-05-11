@@ -59,8 +59,8 @@ class PageWatcher:
 
             if ".webm" in request.url:
                 if not self.ad_message_displayed:
-                    PageWatcher.rutube_ads_watched += 1
-                    self.logger.info(f"{self.name}: Просмотрена Яндекс реклама. Реклам просмотрено: {PageWatcher.rutube_ads_watched}")
+                    PageWatcher.yandex_ads_watched += 1
+                    self.logger.info(f"{self.name}: Просмотрена Яндекс реклама. Реклам просмотрено: {PageWatcher.yandex_ads_watched}")
                     self.ad_message_displayed = True
 
         self.page.on("request", handle_request)
