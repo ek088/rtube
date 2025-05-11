@@ -10,6 +10,7 @@ from aiogram import Bot
 from services.captcha_service import YandexCaptchaEnums, YandexCaptchaSolver
 from datetime import datetime
 import signal
+import json
 
 logging.basicConfig(
     level=logging.INFO,
@@ -33,7 +34,7 @@ class PageWatcher:
     yandex_ads_watched = 0
     reloads_count = 0
     captchas_solved = 0
-    def __init__(self, playwright_instance: Playwright, url_list, refresh_interval, window_size, is_headless, thread_id, name):
+    def __init__(self, playwright_instance: Playwright, url_list, refresh_interval, window_size, is_headless, thread_id, name, cookies):
         self.name = name
         self.playwright = playwright_instance
         self.url_list = url_list
@@ -47,6 +48,7 @@ class PageWatcher:
         self.current_url_index = 0
         self.logger = logging.getLogger(f'Watcher-{self.thread_id}')
         self.ad_message_displayed = False
+        self.cookies = cookies
 
     async def watch_for_webm_requests(self):
         async def handle_request(request: Request):
@@ -106,6 +108,14 @@ class PageWatcher:
                     )
 
                     context = await self.browser.new_context(viewport={'width': self.window_size[0], 'height': self.window_size[1]})
+                    if self.cookies:
+                        try:
+                            with open(self.cookies, 'r', encoding='utf-8') as f:
+                                cookies = json.load(f)
+                                await context.add_cookies(cookies)
+                                self.logger.info(f"{self.name}: Cookies загружены из файла {self.cookies}.")
+                        except Exception as e:
+                            self.logger.error(f"{self.name}: Ошибка при загрузке cookies: {e}")
 
                     self.page = await context.new_page()
 
@@ -255,7 +265,7 @@ def read_urls_from_file(filepath):
         sys.exit(1)
     return urls
 
-async def watch_urls(urls, num_windows, refresh_interval, window_size, is_headless):
+async def watch_urls(urls, num_windows, refresh_interval, window_size, is_headless, cookies):
     if not urls:
         logging.warning("Нет ссылок для просмотра.")
         return
@@ -280,7 +290,7 @@ async def watch_urls(urls, num_windows, refresh_interval, window_size, is_headle
 
         url_index = 0
         for i in range(num_windows):
-            watcher = PageWatcher(p, urls, refresh_interval, window_size, is_headless, thread_id=i, name=f"process_{i}")
+            watcher = PageWatcher(p, urls, refresh_interval, window_size, is_headless, thread_id=i, name=f"process_{i}", cookies=cookies)
             watcher.current_url_index = url_index
             watchers.append(watcher)
             asyncio.create_task(watcher.run())
@@ -358,6 +368,11 @@ async def main():
         action='store_true',
         help='Запустить браузеры в headless режиме (без видимого окна).'
     )
+    parser.add_argument(
+        '-c', '--cookies',
+        type=str,
+        help='Использовать cookies из файла (например, cookies.json).'
+    )
 
 
     args = parser.parse_args()
@@ -374,7 +389,7 @@ async def main():
 
     logging.info(f"Параметры запуска: Windows={args.windows}, Interval={args.interval}, Size={args.size}, Headless={args.headless}")
 
-    await watch_urls(urls, args.windows, args.interval, window_size, args.headless)
+    await watch_urls(urls, args.windows, args.interval, window_size, args.headless, args.cookies)
 
 if __name__ == "__main__":
     try:
