@@ -210,6 +210,7 @@ dependencies = [
     { name = "aiogram" },
     { name = "playwright" },
     { name = "python-dotenv" },
+    { name = "requests" },
 ]
 
 [package.metadata]
@@ -218,6 +219,7 @@ requires-dist = [
     { name = "aiogram", specifier = ">=3.20.0.post0" },
     { name = "playwright", specifier = ">=1.52.0" },
     { name = "python-dotenv", specifier = ">=1.1.0" },
+    { name = "requests", specifier = ">=2.32.3" },
 ]
 
 [[package]]
