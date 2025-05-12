@@ -1,6 +1,7 @@
 import argparse
 import logging
 import asyncio
+import requests
 import sys
 import random
 import settings
@@ -249,19 +250,21 @@ class PageWatcher:
         self._stop_event.set()
 
 
-def read_urls_from_file(filepath):
+def read_urls_from_file(gist_url):
     urls = []
     try:
-        with open(filepath, 'r', encoding='utf-8') as f:
-            for line in f:
-                url = line.strip()
-                if url:
-                    urls.append(url)
-    except FileNotFoundError:
-        logging.error(f"Файл с ссылками не найден: {filepath}")
+        response = requests.get(gist_url)
+        response.raise_for_status()
+        content = response.text
+        for line in content.splitlines():
+            url = line.strip()
+            if url:
+                urls.append(url)
+    except requests.exceptions.RequestException as e:
+        logging.error(f"Ошибка при запросе к GitHub Gist {gist_url}: {e}")
         sys.exit(1)
     except Exception as e:
-        logging.error(f"Ошибка при чтении файла с ссылками {filepath}: {e}")
+        logging.error(f"Произошла непредвиденная ошибка при чтении из Gist {gist_url}: {e}")
         sys.exit(1)
     return urls
 
@@ -361,7 +364,7 @@ async def main():
     parser.add_argument(
         'urls_file',
         type=str,
-        help='Путь к файлу, содержащему список URL (одна ссылка на строку)'
+        help='Путь к github gist, содержащему список URL (одна ссылка на строку)'
     )
     parser.add_argument(
         '-H', '--headless',
