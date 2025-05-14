@@ -172,7 +172,7 @@ class PageWatcher:
 
                     except Error as e:
                         self.logger.error(f"{self.name}: Ошибка Playwright при обновлении на {next_url}: {e}")
-                        break
+                        await asyncio.sleep(60)
 
                     except Exception as e:
                         self.logger.error(f"{self.name}: Непредвиденная ошибка во внутреннем цикле: {e}")
@@ -250,22 +250,33 @@ class PageWatcher:
         self._stop_event.set()
 
 
-def read_urls_from_file(gist_url):
+def read_urls_from_file(gist_url, from_file=False):
     urls = []
-    try:
-        response = requests.get(gist_url)
-        response.raise_for_status()
-        content = response.text
-        for line in content.splitlines():
-            url = line.strip()
-            if url:
-                urls.append(url)
-    except requests.exceptions.RequestException as e:
-        logging.error(f"Ошибка при запросе к GitHub Gist {gist_url}: {e}")
-        sys.exit(1)
-    except Exception as e:
-        logging.error(f"Произошла непредвиденная ошибка при чтении из Gist {gist_url}: {e}")
-        sys.exit(1)
+    if from_file:
+        try:
+            with open(gist_url, 'r', encoding='utf-8') as f:
+                urls = [line.strip() for line in f if line.strip()]
+        except FileNotFoundError:
+            logging.error(f"Файл {gist_url} не найден.")
+            sys.exit(1)
+        except Exception as e:
+            logging.error(f"Произошла ошибка при чтении файла {gist_url}: {e}")
+            sys.exit(1)
+    else:
+        try:
+            response = requests.get(gist_url)
+            response.raise_for_status()
+            content = response.text
+            for line in content.splitlines():
+                url = line.strip()
+                if url:
+                    urls.append(url)
+        except requests.exceptions.RequestException as e:
+            logging.error(f"Ошибка при запросе к GitHub Gist {gist_url}: {e}")
+            sys.exit(1)
+        except Exception as e:
+            logging.error(f"Произошла непредвиденная ошибка при чтении из Gist {gist_url}: {e}")
+            sys.exit(1)
     return urls
 
 async def watch_urls(urls, num_windows, refresh_interval, window_size, is_headless, cookies):
@@ -376,6 +387,11 @@ async def main():
         type=str,
         help='Использовать cookies из файла (например, cookies.json).'
     )
+    parser.add_argument(
+        '-F', '--from-file',
+        action='store_true',
+        help='Использовать вместо ссылки файл с ссылками.'
+    )
 
 
     args = parser.parse_args()
@@ -388,7 +404,7 @@ async def main():
         sys.exit(1)
 
     logging.info(f"Чтение ссылок из файла: {args.urls_file}")
-    urls = read_urls_from_file(args.urls_file)
+    urls = read_urls_from_file(args.urls_file, args.from_file)
 
     logging.info(f"Параметры запуска: Windows={args.windows}, Interval={args.interval}, Size={args.size}, Headless={args.headless}")
 
