@@ -62,9 +62,9 @@ class PageWatcher:
         self.page.on("request", handle_request)
 
     async def solve_yandex_captcha(self):
-        if random.randint(1,3) != 2:
-            self.logger.info(f'{self.name}: Пробую скипнуть без прохождения капчи')
-            return
+        # if random.randint(1,3) != 2:
+        #     self.logger.info(f'{self.name}: Пробую скипнуть без прохождения капчи')
+        #     return
 
         captcha_button = self.page.locator(YandexCaptchaEnums.IM_NOT_ROBOT_BUTTON)
         await captcha_button.wait_for(timeout=20000)
