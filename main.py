@@ -50,6 +50,8 @@ class PageWatcher:
         self.logger = logging.getLogger(f'Watcher-{self.thread_id}')
         self.ad_message_displayed = False
         self.cookies = cookies
+        self.context = None
+        self.local_loads = 0
 
     async def watch_for_webm_requests(self):
         async def handle_request(request: Request):
@@ -108,17 +110,17 @@ class PageWatcher:
                         headless=self.is_headless,
                     )
 
-                    context = await self.browser.new_context(viewport={'width': self.window_size[0], 'height': self.window_size[1]})
+                    self.context = await self.browser.new_context(viewport={'width': self.window_size[0], 'height': self.window_size[1]})
                     if self.cookies:
                         try:
                             with open(self.cookies, 'r', encoding='utf-8') as f:
                                 cookies = json.load(f)
-                                await context.add_cookies(cookies)
+                                await self.context.add_cookies(cookies)
                                 self.logger.info(f"{self.name}: Cookies загружены из файла {self.cookies}.")
                         except Exception as e:
                             self.logger.error(f"{self.name}: Ошибка при загрузке cookies: {e}")
 
-                    self.page = await context.new_page()
+                    self.page = await self.context.new_page()
 
                     async with pages_lock:
                         active_pages.append(self.page)
@@ -161,11 +163,18 @@ class PageWatcher:
                                 PageWatcher.rutube_ads_watched += 1
                                 self.logger.info(f"{self.name}: Rutube Реклам просмотрено: {PageWatcher.rutube_ads_watched}" )
                             PageWatcher.reloads_count += 1
+                            self.local_loads += 1
                         except:
                             pass
 
                         await self.watch_for_webm_requests()
                         self.ad_message_displayed = False
+                        if self.local_loads % 50 == 0:
+                            self.logger.info(f"{self.name}: Перезапускаю контекст")
+                            await self.context.close()
+                            self.context = await self.browser.new_context(viewport={'width': self.window_size[0], 'height': self.window_size[1]})
+                            self.page = await self.context.new_page()
+
                         await self.page.goto(next_url, wait_until="load", timeout=30000)
 
                         self.logger.info(f"{self.name}: Обновлено, перешли на ссылку: {next_url}")
@@ -311,7 +320,7 @@ async def watch_urls(urls, num_windows, refresh_interval, window_size, is_headle
 
             url_index = (url_index + 1) % len(urls)
 
-            await asyncio.sleep(2)
+            await asyncio.sleep(4)
 
 
         logging.info("Все наблюдатели запущены.")
