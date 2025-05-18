@@ -189,7 +189,7 @@ class PageWatcher:
                         except:
                             pass
 
-                        if self.local_loads % 70 == 0:
+                        if self.local_loads % 60 == 0:
                             self.logger.info(f"{self.name}: Перезапускаю контекст")
                             await self.context.close()
                             self.context = await self.browser.new_context(viewport={'width': self.window_size[0], 'height': self.window_size[1]})
@@ -213,7 +213,7 @@ class PageWatcher:
                         # Ожидаем обнаружения .webm или таймаута
                         try:
                             await asyncio.wait_for(webm_found.wait(), timeout=4)
-                            if cpm_metric <= 3:
+                            if cpm_metric <= 4:
 
                                 await self.page.mouse.click(140, 330)
                                 await asyncio.sleep(5)
