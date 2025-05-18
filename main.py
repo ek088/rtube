@@ -53,15 +53,34 @@ class PageWatcher:
         self.context = None
         self.local_loads = 0
 
-    async def watch_for_webm_requests(self):
+    async def watch_for_webm_requests(self, timeout_seconds: int = 4) -> bool:
+        """
+        Ожидает появления запроса с '.webm' или истечения таймаута.
+        Args:
+            timeout_seconds: Время ожидания в секундах.
+        Returns:
+            True, если запрос с '.webm' был обнаружен в течение таймаута,
+            False в противном случае.
+        """
+        self.ad_message_displayed = False
+        webm_found = asyncio.Event()
         async def handle_request(request: Request):
             if ".webm" in request.url:
                 if not self.ad_message_displayed:
                     PageWatcher.yandex_ads_watched += 1
                     self.logger.info(f"{self.name}: Просмотрена Яндекс реклама. Реклам просмотрено: {PageWatcher.yandex_ads_watched}")
                     self.ad_message_displayed = True
-
+                    webm_found.set() # Устанавливаем событие, когда найдено .webm
         self.page.on("request", handle_request)
+        try:
+            await asyncio.wait_for(webm_found.wait(), timeout=timeout_seconds)
+            return True  # .webm найдено в течение таймаута
+        except asyncio.TimeoutError:
+            self.logger.info(f"{self.name}: Таймаут ожидания .webm запроса ({timeout_seconds} сек).")
+            return False
+        finally:
+
+            pass
 
     async def solve_yandex_captcha(self):
         # if random.randint(1,3) != 2:
@@ -151,7 +170,9 @@ class PageWatcher:
                                 except Exception as e:
                                     logging.error(f"{self.name}: Ошибка при решении капчи: {e}")
 
-                            await asyncio.wait_for(self._stop_event.wait(), timeout=random.randint(self.refresh_interval - 2, self.refresh_interval + 4))
+
+                            await asyncio.wait_for(self._stop_event.wait(), timeout=0.5)
+
                             self.logger.info(f"{self.name}: Получен сигнал остановки во время ожидания, завершение внутреннего цикла.")
                             break
                         except asyncio.TimeoutError:
@@ -167,8 +188,6 @@ class PageWatcher:
                         except:
                             pass
 
-                        await self.watch_for_webm_requests()
-                        self.ad_message_displayed = False
                         if self.local_loads % 50 == 0:
                             self.logger.info(f"{self.name}: Перезапускаю контекст")
                             await self.context.close()
@@ -176,6 +195,8 @@ class PageWatcher:
                             self.page = await self.context.new_page()
 
                         await self.page.goto(next_url, wait_until="load", timeout=30000)
+                        print(await self.watch_for_webm_requests())
+                        self.ad_message_displayed = False
 
                         self.logger.info(f"{self.name}: Обновлено, перешли на ссылку: {next_url}")
 
