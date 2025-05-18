@@ -155,6 +155,7 @@ class PageWatcher:
                     initial_url = self.url_list[self.current_url_index]
                     await self.page.goto(initial_url, timeout=120000, wait_until="domcontentloaded")
                     self.logger.info(f"{self.name}: Открыта начальная ссылка в новой странице: {initial_url}")
+                    cpm_metric = 0 # счетчик кликов по рекламе. Необходимо чтобы было 3
 
                 while not self._stop_event.is_set():
                     self.current_url_index = (self.current_url_index + 1) % len(self.url_list)
@@ -188,7 +189,7 @@ class PageWatcher:
                         except:
                             pass
 
-                        if self.local_loads % 50 == 0:
+                        if self.local_loads % 70 == 0:
                             self.logger.info(f"{self.name}: Перезапускаю контекст")
                             await self.context.close()
                             self.context = await self.browser.new_context(viewport={'width': self.window_size[0], 'height': self.window_size[1]})
@@ -210,11 +211,21 @@ class PageWatcher:
 
                         # Ожидаем обнаружения .webm или таймаута
                         try:
-                            await asyncio.wait_for(webm_found.wait(), timeout=4) # Используем таймаут 4 секунды для ожидания .webm
-                            self.logger.info(f"{self.name}: .webm запрос обнаружен, переходим к следующему URL.")
+                            await asyncio.wait_for(webm_found.wait(), timeout=4)
+                            if cpm_metric <= 3:
+
+                                await self.page.mouse.click(140, 330)
+                                await asyncio.sleep(5)
+                                for page in self.context.pages:
+                                    if page != self.page:
+                                        await page.close()
+                                print(len(self.context.pages))
+                                cpm_metric += 1
+                                self.logger.info(f"{self.name}: CPM: " + str(cpm_metric))
                         except asyncio.TimeoutError:
-                            self.logger.info(f"{self.name}: .webm запрос не обнаружен в течение 4 секунд.")
+                            pass
                         finally:
+                            await asyncio.sleep(0.5)
                             # Важно удалить обработчик события
                             self.page.remove_listener("request", handle_request)
 
