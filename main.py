@@ -193,6 +193,7 @@ class PageWatcher:
                             self.logger.info(f"{self.name}: Перезапускаю контекст")
                             await self.context.close()
                             self.context = await self.browser.new_context(viewport={'width': self.window_size[0], 'height': self.window_size[1]})
+                            cpm_metric = 0
                             self.page = await self.context.new_page()
 
                         # Устанавливаем обработчик запросов перед переходом на страницу
