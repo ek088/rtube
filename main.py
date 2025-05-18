@@ -194,8 +194,31 @@ class PageWatcher:
                             self.context = await self.browser.new_context(viewport={'width': self.window_size[0], 'height': self.window_size[1]})
                             self.page = await self.context.new_page()
 
+                        # Устанавливаем обработчик запросов перед переходом на страницу
+                        webm_found = asyncio.Event()
+                        async def handle_request(request: Request):
+                            if ".webm" in request.url:
+                                if not self.ad_message_displayed:
+                                    PageWatcher.yandex_ads_watched += 1
+                                    self.logger.info(f"{self.name}: Просмотрена Яндекс реклама. Реклам просмотрено: {PageWatcher.yandex_ads_watched}")
+                                    self.ad_message_displayed = True
+                                    webm_found.set()
+
+                        self.page.on("request", handle_request)
+
                         await self.page.goto(next_url, wait_until="load", timeout=30000)
-                        print(await self.watch_for_webm_requests())
+
+                        # Ожидаем обнаружения .webm или таймаута
+                        try:
+                            await asyncio.wait_for(webm_found.wait(), timeout=4) # Используем таймаут 4 секунды для ожидания .webm
+                            self.logger.info(f"{self.name}: .webm запрос обнаружен, переходим к следующему URL.")
+                        except asyncio.TimeoutError:
+                            self.logger.info(f"{self.name}: .webm запрос не обнаружен в течение 4 секунд.")
+                        finally:
+                            # Важно удалить обработчик события
+                            self.page.remove_listener("request", handle_request)
+
+
                         self.ad_message_displayed = False
 
                         self.logger.info(f"{self.name}: Обновлено, перешли на ссылку: {next_url}")
