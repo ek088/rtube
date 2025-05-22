@@ -35,7 +35,7 @@ class PageWatcher:
     yandex_ads_watched = 0
     reloads_count = 0
     captchas_solved = 0
-    def __init__(self, playwright_instance: Playwright, url_list, refresh_interval, window_size, is_headless, thread_id, name, cookies):
+    def __init__(self, playwright_instance: Playwright, url_list, refresh_interval, window_size, is_headless, thread_id, name, cookies, refresh_count):
         self.name = name
         self.playwright = playwright_instance
         self.url_list = url_list
@@ -52,6 +52,7 @@ class PageWatcher:
         self.cookies = cookies
         self.context = None
         self.local_loads = 0
+        self.refresh_count = refresh_count
 
     async def watch_for_webm_requests(self, timeout_seconds: int = 4) -> bool:
         """
@@ -189,7 +190,7 @@ class PageWatcher:
                         except:
                             pass
 
-                        if self.local_loads % 60 == 0:
+                        if self.local_loads % self.refresh_count == 0:
                             self.logger.info(f"{self.name}: Перезапускаю контекст")
                             await self.context.close()
                             self.context = await self.browser.new_context(viewport={'width': self.window_size[0], 'height': self.window_size[1]})
@@ -344,7 +345,7 @@ def read_urls_from_file(gist_url, from_file=False):
             sys.exit(1)
     return urls
 
-async def watch_urls(urls, num_windows, refresh_interval, window_size, is_headless, cookies):
+async def watch_urls(urls, num_windows, refresh_interval, window_size, is_headless, cookies, refresh_count):
     if not urls:
         logging.warning("Нет ссылок для просмотра.")
         return
@@ -369,7 +370,7 @@ async def watch_urls(urls, num_windows, refresh_interval, window_size, is_headle
 
         url_index = 0
         for i in range(num_windows):
-            watcher = PageWatcher(p, urls, refresh_interval, window_size, is_headless, thread_id=i, name=f"process_{i}", cookies=cookies)
+            watcher = PageWatcher(p, urls, refresh_interval, window_size, is_headless, thread_id=i, name=f"process_{i}", cookies=cookies, refresh_count=refresh_count)
             watcher.current_url_index = url_index
             watchers.append(watcher)
             asyncio.create_task(watcher.run())
@@ -457,6 +458,12 @@ async def main():
         action='store_true',
         help='Использовать вместо ссылки файл с ссылками.'
     )
+    parser.add_argument(
+        '-r', '--refresh-count',
+        type=int,
+        default=150,
+        help='Кол-во перезагрузок для сброса контекста'
+    )
 
 
     args = parser.parse_args()
@@ -473,7 +480,7 @@ async def main():
 
     logging.info(f"Параметры запуска: Windows={args.windows}, Interval={args.interval}, Size={args.size}, Headless={args.headless}")
 
-    await watch_urls(urls, args.windows, args.interval, window_size, args.headless, args.cookies)
+    await watch_urls(urls, args.windows, args.interval, window_size, args.headless, args.cookies, args.refresh_count)
 
 if __name__ == "__main__":
     try:
