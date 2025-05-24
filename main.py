@@ -256,7 +256,7 @@ class PageWatcher:
 
                     except Error as e:
                         self.logger.error(f"{self.name}: Ошибка Playwright при обновлении на {next_url}: {e}")
-                        await asyncio.sleep(60)
+                        # await asyncio.sleep(60) # Убираем из-за ошибки ожидания
 
                     except Exception as e:
                         self.logger.error(f"{self.name}: Непредвиденная ошибка во внутреннем цикле: {e}")
