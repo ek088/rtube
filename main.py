@@ -254,8 +254,8 @@ class PageWatcher:
 
                     except Error as e:
                         self.logger.error(f"{self.name}: Ошибка Playwright при обновлении на {next_url}: {e}")
-                        await asyncio.wait_for(webm_found.wait(), timeout=1)
-                        self.page.remove_listener("request", handle_request)
+                        # await asyncio.wait_for(webm_found.wait(), timeout=1)
+                        # self.page.remove_listener("request", handle_request)
                         # await asyncio.sleep(60) # Убираем из-за ошибки ожидания
 
                     except Exception as e:
