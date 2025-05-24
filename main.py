@@ -5,13 +5,14 @@ import requests
 import sys
 import random
 import settings
+import signal
+import json
 from typing import Optional
 from playwright.async_api import async_playwright, Playwright, Browser, Page, Error, Request
 from aiogram import Bot
 from services.captcha_service import YandexCaptchaEnums, YandexCaptchaSolver
 from datetime import datetime
-import signal
-import json
+from fake_useragent import UserAgent
 
 logging.basicConfig(
     level=logging.INFO,
@@ -29,13 +30,17 @@ alerting_bot = Bot(settings.TELEGRAM_BOT_TOKEN)
 
 active_pages = []
 pages_lock = asyncio.Lock()
+user_agents_geneator = UserAgent(platforms="desktop")
+
 
 class PageWatcher:
     rutube_ads_watched = 0
     yandex_ads_watched = 0
     reloads_count = 0
     captchas_solved = 0
-    def __init__(self, playwright_instance: Playwright, url_list, refresh_interval, window_size, is_headless, thread_id, name, cookies, refresh_count):
+
+    def __init__(self, playwright_instance: Playwright, url_list, refresh_interval, window_size, is_headless, thread_id,
+                 name, cookies, refresh_count):
         self.name = name
         self.playwright = playwright_instance
         self.url_list = url_list
@@ -65,13 +70,16 @@ class PageWatcher:
         """
         self.ad_message_displayed = False
         webm_found = asyncio.Event()
+
         async def handle_request(request: Request):
             if ".webm" in request.url:
                 if not self.ad_message_displayed:
                     PageWatcher.yandex_ads_watched += 1
-                    self.logger.info(f"{self.name}: Просмотрена Яндекс реклама. Реклам просмотрено: {PageWatcher.yandex_ads_watched}")
+                    self.logger.info(
+                        f"{self.name}: Просмотрена Яндекс реклама. Реклам просмотрено: {PageWatcher.yandex_ads_watched}")
                     self.ad_message_displayed = True
-                    webm_found.set() # Устанавливаем событие, когда найдено .webm
+                    webm_found.set()  # Устанавливаем событие, когда найдено .webm
+
         self.page.on("request", handle_request)
         try:
             await asyncio.wait_for(webm_found.wait(), timeout=timeout_seconds)
@@ -130,7 +138,9 @@ class PageWatcher:
                         headless=self.is_headless,
                     )
 
-                    self.context = await self.browser.new_context(viewport={'width': self.window_size[0], 'height': self.window_size[1]})
+                    self.context = await self.browser.new_context(
+                        viewport={'width': self.window_size[0], 'height': self.window_size[1]},
+                        user_agent=user_agents_geneator.random)
                     if self.cookies:
                         try:
                             with open(self.cookies, 'r', encoding='utf-8') as f:
@@ -145,18 +155,18 @@ class PageWatcher:
                     async with pages_lock:
                         active_pages.append(self.page)
 
-                    self.logger.info(f"{self.name}: Браузер и страница инициализированы (headless: {self.is_headless}).")
+                    self.logger.info(
+                        f"{self.name}: Браузер и страница инициализированы (headless: {self.is_headless}).")
 
                     if not self.url_list:
                         self.logger.warning("Список ссылок пуст.")
                         self.stop()
                         break
 
-
                     initial_url = self.url_list[self.current_url_index]
                     await self.page.goto(initial_url, timeout=120000, wait_until="domcontentloaded")
                     self.logger.info(f"{self.name}: Открыта начальная ссылка в новой странице: {initial_url}")
-                    cpm_metric = 0 # счетчик кликов по рекламе. Необходимо чтобы было 3
+                    cpm_metric = 0  # счетчик кликов по рекламе. Необходимо чтобы было 3
 
                 while not self._stop_event.is_set():
                     self.current_url_index = (self.current_url_index + 1) % len(self.url_list)
@@ -172,19 +182,20 @@ class PageWatcher:
                                 except Exception as e:
                                     logging.error(f"{self.name}: Ошибка при решении капчи: {e}")
 
-
                             await asyncio.wait_for(self._stop_event.wait(), timeout=0.5)
 
-                            self.logger.info(f"{self.name}: Получен сигнал остановки во время ожидания, завершение внутреннего цикла.")
+                            self.logger.info(
+                                f"{self.name}: Получен сигнал остановки во время ожидания, завершение внутреннего цикла.")
                             break
                         except asyncio.TimeoutError:
-                             pass
+                            pass
 
                         try:
                             ad_element = self.page.locator("text=Отключить рекламу")
                             if await ad_element.count() > 0:
                                 PageWatcher.rutube_ads_watched += 1
-                                self.logger.info(f"{self.name}: Rutube Реклам просмотрено: {PageWatcher.rutube_ads_watched}" )
+                                self.logger.info(
+                                    f"{self.name}: Rutube Реклам просмотрено: {PageWatcher.rutube_ads_watched}")
                             PageWatcher.reloads_count += 1
                             self.local_loads += 1
                         except:
@@ -193,44 +204,51 @@ class PageWatcher:
                         if self.local_loads % self.refresh_count == 0:
                             self.logger.info(f"{self.name}: Перезапускаю контекст")
                             await self.context.close()
-                            self.context = await self.browser.new_context(viewport={'width': self.window_size[0], 'height': self.window_size[1]})
+                            self.context = await self.browser.new_context(
+                                viewport={'width': self.window_size[0], 'height': self.window_size[1]},
+                                user_agent=user_agents_geneator.random)
                             cpm_metric = 0
                             self.page = await self.context.new_page()
 
                         # Устанавливаем обработчик запросов перед переходом на страницу
                         webm_found = asyncio.Event()
+
                         async def handle_request(request: Request):
                             if ".webm" in request.url:
                                 if not self.ad_message_displayed:
                                     PageWatcher.yandex_ads_watched += 1
-                                    self.logger.info(f"{self.name}: Просмотрена Яндекс реклама. Реклам просмотрено: {PageWatcher.yandex_ads_watched}")
+                                    self.logger.info(
+                                        f"{self.name}: Просмотрена Яндекс реклама. Реклам просмотрено: {PageWatcher.yandex_ads_watched}")
+
                                     self.ad_message_displayed = True
                                     webm_found.set()
 
                         self.page.on("request", handle_request)
 
-                        await self.page.goto(next_url, wait_until="load", timeout=30000)
+                        await self.page.goto(next_url, wait_until="load", timeout=6000)
 
                         # Ожидаем обнаружения .webm или таймаута
                         try:
                             await asyncio.wait_for(webm_found.wait(), timeout=4)
-                            if cpm_metric <= 4:
+                            if cpm_metric <= 3:
 
                                 await self.page.mouse.click(140, 330)
                                 await asyncio.sleep(5)
-                                for page in self.context.pages:
-                                    if page != self.page:
-                                        await page.close()
-                                print(len(self.context.pages))
-                                cpm_metric += 1
-                                self.logger.info(f"{self.name}: CPM: " + str(cpm_metric))
+                                if len(self.context.pages) > 1:
+                                    for page in self.context.pages:
+                                        if page != self.page:
+                                            await page.close()
+                                    print(len(self.context.pages))
+                                    cpm_metric += 1
+                                    self.logger.info(f"{self.name}: CPM: " + str(cpm_metric))
+                                else:
+                                    self.logger.info(f"{self.name}: Произошла ошибка при попытке открыть рекламу")
                         except asyncio.TimeoutError:
                             pass
                         finally:
                             await asyncio.sleep(0.5)
                             # Важно удалить обработчик события
                             self.page.remove_listener("request", handle_request)
-
 
                         self.ad_message_displayed = False
 
@@ -245,25 +263,25 @@ class PageWatcher:
                         break
 
                 if self._stop_event.is_set():
-                     self.logger.info(f"{self.name}: Внешний цикл: Обнаружен сигнал остановки.")
-                     break
+                    self.logger.info(f"{self.name}: Внешний цикл: Обнаружен сигнал остановки.")
+                    break
 
             except Error as e:
-                 self.logger.error(f"{self.name}: Ошибка Playwright при работе или инициализации: {e}")
-                 await self._close_browser_and_page()
+                self.logger.error(f"{self.name}: Ошибка Playwright при работе или инициализации: {e}")
+                await self._close_browser_and_page()
 
-                 if not self._stop_event.is_set():
-                     restart_delay = random.randint(1, 5)
-                     self.logger.warning(f"{self.name}: Попытка перезапуска через {restart_delay} секунд...")
-                     try:
-                         await asyncio.wait_for(self._stop_event.wait(), timeout=restart_delay)
-                         self.logger.info(f"{self.name}: Получен сигнал остановки во время задержки перезапуска.")
-                         break
-                     except asyncio.TimeoutError:
-                         pass
-                 else:
-                      self.logger.info(f"{self.name}: Сигнал остановки получен, перезапуск отменен.")
-                      break
+                if not self._stop_event.is_set():
+                    restart_delay = random.randint(1, 5)
+                    self.logger.warning(f"{self.name}: Попытка перезапуска через {restart_delay} секунд...")
+                    try:
+                        await asyncio.wait_for(self._stop_event.wait(), timeout=restart_delay)
+                        self.logger.info(f"{self.name}: Получен сигнал остановки во время задержки перезапуска.")
+                        break
+                    except asyncio.TimeoutError:
+                        pass
+                else:
+                    self.logger.info(f"{self.name}: Сигнал остановки получен, перезапуск отменен.")
+                    break
 
 
             except Exception as e:
@@ -278,17 +296,16 @@ class PageWatcher:
                         self.logger.info(f"{self.name}: Получен сигнал остановки во время задержки перезапуска.")
                         break
                     except asyncio.TimeoutError:
-                         pass
+                        pass
                 else:
-                     self.logger.info(f"{self.name}: Сигнал остановки получен, перезапуск отменен.")
-                     break
+                    self.logger.info(f"{self.name}: Сигнал остановки получен, перезапуск отменен.")
+                    break
 
 
             finally:
                 self.logger.info(f"{self.name}: Наблюдатель страницы завершает работу.")
                 await self._close_browser_and_page()
                 self.logger.info(f"{self.name}: Наблюдатель страницы завершен.")
-
 
     async def _close_browser_and_page(self):
         if self.page:
@@ -309,7 +326,6 @@ class PageWatcher:
             except Exception as e:
                 self.logger.error(f"Ошибка при закрытии браузера: {e}")
             self.browser = None
-
 
     def stop(self):
         self.logger.info("Получен запрос на остановку.")
@@ -345,6 +361,7 @@ def read_urls_from_file(gist_url, from_file=False):
             sys.exit(1)
     return urls
 
+
 async def watch_urls(urls, num_windows, refresh_interval, window_size, is_headless, cookies, refresh_count):
     if not urls:
         logging.warning("Нет ссылок для просмотра.")
@@ -370,7 +387,8 @@ async def watch_urls(urls, num_windows, refresh_interval, window_size, is_headle
 
         url_index = 0
         for i in range(num_windows):
-            watcher = PageWatcher(p, urls, refresh_interval, window_size, is_headless, thread_id=i, name=f"process_{i}", cookies=cookies, refresh_count=refresh_count)
+            watcher = PageWatcher(p, urls, refresh_interval, window_size, is_headless, thread_id=i, name=f"process_{i}",
+                                  cookies=cookies, refresh_count=refresh_count)
             watcher.current_url_index = url_index
             watchers.append(watcher)
             asyncio.create_task(watcher.run())
@@ -379,13 +397,11 @@ async def watch_urls(urls, num_windows, refresh_interval, window_size, is_headle
 
             await asyncio.sleep(4)
 
-
         logging.info("Все наблюдатели запущены.")
         if is_headless:
             logging.info("Браузеры работают в headless режиме (без видимых окон).")
         else:
             logging.info("Браузеры работают в видимом режиме.")
-
 
         try:
             await stop_event.wait()
@@ -396,7 +412,8 @@ async def watch_urls(urls, num_windows, refresh_interval, window_size, is_headle
                 watcher.stop()
 
             logging.info("Ожидание завершения наблюдателей...")
-            await asyncio.gather(*[watcher.run() for watcher in watchers if not watcher._stop_event.is_set()], return_exceptions=True)
+            await asyncio.gather(*[watcher.run() for watcher in watchers if not watcher._stop_event.is_set()],
+                                 return_exceptions=True)
 
             logging.info("Закрытие оставшихся страниц и браузеров.")
             async with pages_lock:
@@ -404,7 +421,7 @@ async def watch_urls(urls, num_windows, refresh_interval, window_size, is_headle
                     try:
                         await page.close()
                         if page in active_pages:
-                             active_pages.remove(page)
+                            active_pages.remove(page)
                     except Exception as e:
                         logging.error(f"Ошибка при закрытии страницы в finally блоке watch_urls: {e}")
             worktime = datetime.now() - start_time
@@ -419,7 +436,8 @@ async def watch_urls(urls, num_windows, refresh_interval, window_size, is_headle
 
 
 async def main():
-    parser = argparse.ArgumentParser(description='Программа для просмотра веб-страниц в нескольких окнах с обновлением.')
+    parser = argparse.ArgumentParser(
+        description='Программа для просмотра веб-страниц в нескольких окнах с обновлением.')
     parser.add_argument(
         '-w', '--windows',
         type=int,
@@ -465,22 +483,24 @@ async def main():
         help='Кол-во перезагрузок для сброса контекста'
     )
 
-
     args = parser.parse_args()
 
     try:
         width, height = map(int, args.size.split('x'))
         window_size = (width, height)
     except ValueError:
-        logging.error(f"Неверный формат размера окна: {args.size}. Используйте формат ШИРИНАxВЫСОТА (например, 800x600).")
+        logging.error(
+            f"Неверный формат размера окна: {args.size}. Используйте формат ШИРИНАxВЫСОТА (например, 800x600).")
         sys.exit(1)
 
     logging.info(f"Чтение ссылок из файла: {args.urls_file}")
     urls = read_urls_from_file(args.urls_file, args.from_file)
 
-    logging.info(f"Параметры запуска: Windows={args.windows}, Interval={args.interval}, Size={args.size}, Headless={args.headless}")
+    logging.info(
+        f"Параметры запуска: Windows={args.windows}, Interval={args.interval}, Size={args.size}, Headless={args.headless}")
 
     await watch_urls(urls, args.windows, args.interval, window_size, args.headless, args.cookies, args.refresh_count)
+
 
 if __name__ == "__main__":
     try:
