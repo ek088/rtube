@@ -164,7 +164,7 @@ class PageWatcher:
                         break
 
                     initial_url = self.url_list[self.current_url_index]
-                    await self.page.goto(initial_url, timeout=120000, wait_until="domcontentloaded")
+                    await self.page.goto(initial_url, timeout=30000, wait_until="domcontentloaded")
                     self.logger.info(f"{self.name}: Открыта начальная ссылка в новой странице: {initial_url}")
                     cpm_metric = 0  # счетчик кликов по рекламе. Необходимо чтобы было 3
 
@@ -250,17 +250,19 @@ class PageWatcher:
                             # Важно удалить обработчик события
                             self.page.remove_listener("request", handle_request)
 
-                        self.ad_message_displayed = False
-
                         self.logger.info(f"{self.name}: Обновлено, перешли на ссылку: {next_url}")
 
                     except Error as e:
                         self.logger.error(f"{self.name}: Ошибка Playwright при обновлении на {next_url}: {e}")
+                        await asyncio.wait_for(webm_found.wait(), timeout=1)
+                        self.page.remove_listener("request", handle_request)
                         # await asyncio.sleep(60) # Убираем из-за ошибки ожидания
 
                     except Exception as e:
                         self.logger.error(f"{self.name}: Непредвиденная ошибка во внутреннем цикле: {e}")
                         break
+                    finally:
+                        self.ad_message_displayed = False
 
                 if self._stop_event.is_set():
                     self.logger.info(f"{self.name}: Внешний цикл: Обнаружен сигнал остановки.")
@@ -479,7 +481,7 @@ async def main():
     parser.add_argument(
         '-r', '--refresh-count',
         type=int,
-        default=150,
+        default=100,
         help='Кол-во перезагрузок для сброса контекста'
     )
 
